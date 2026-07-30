@@ -47,32 +47,30 @@ sh boot/build.sh vramtest              # boot.hex <- the VERA816 conformance tes
 `boot/boot.hex` is committed, so the bitstream builds with no toolchain
 installed.
 
+Copy the result to `/media/fat/_Computer/` on the MiSTer SD card and **keep
+MiSTer's `<Name>_<date>.rbf` naming convention** — e.g. `X816_20260730.rbf`.
+A file that does not follow the pattern can misbehave in the launcher in ways
+that look exactly like a broken bitstream (black screen, unresponsive board).
+That cost an afternoon of RTL debugging here.
+
 ## What it does today
 
-**VERA816 is confirmed on real hardware.** `sh boot/build.sh vramtest` builds a
+**Confirmed working on real hardware** (DE10-Nano) — both the bands bring-up
+demo and the VERA816 conformance test, matching the emulator.
+
+`sh boot/build.sh vramtest` builds a
 bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)
 — green on pass, red on fail — and it comes up green on a DE10-Nano as well as
 on the emulator. That proves the full 352 KB is addressable, the 19-bit path
 works including bits 17 and 18, the unpopulated region reads zero without
 aliasing, auto-increment wraps, and `VRAMCAP` reads 22.
 
-> **KNOWN BUG — the bands demo currently hangs the board.** It ran correctly
-> on the pre-ADDRX build, and it still runs correctly in the emulator, but with
-> the current RTL it produces a black screen and takes the whole MiSTer down
-> (the OSD dies too, so a power cycle is needed). Under investigation. Ruled
-> out so far: the incremental build flow (a clean rebuild is bit-identical),
-> the address-register resets (both are reset to 0), and the one combinational
-> loop in the design (it is in the framework's `vga_out`, pre-existing).
->
-> The conformance test masks whatever it is, because `vramtest.s` explicitly
-> writes `ADDRX = 0` while `boot.s` never touches it and relies on reset.
-
 Power-on runs the boot stub: enters native mode, sets up S/D/DBR, copies
 itself into RAM and drops the ROM overlay, then brings VERA up in 320×240 8bpp
 bitmap mode and paints horizontal colour bands. That is a font-free proof that
 the CPU, native mode, the flat bus, the I/O decode and video all work.
 
-On the build where it worked, that one result validated the PLL frequencies, native-mode entry, the boot
+That one result validates the PLL frequencies, native-mode entry, the boot
 overlay's self-copy and its `SYSCTL` unmapping mid-instruction-stream, bank-0
 BRAM, the VERA bus pipeline and the MiSTer video path — and, because this
 bitstream carries the 352 KB VERA816 widening, that the widening did not break
