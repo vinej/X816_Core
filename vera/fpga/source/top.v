@@ -79,8 +79,8 @@ module top(
     // decoders and the internal-bus (ib_*) registers moved into the new
     // addr_data module (ported from vera-module v47.0.2), which also
     // implements the FX helpers.  They surface here as wires.
-    wire [16:0] vram_addr_0_r;
-    wire [16:0] vram_addr_1_r;
+    wire [18:0] vram_addr_0_r;
+    wire [18:0] vram_addr_1_r;
     wire        vram_addr_nib_0_r;
     wire        vram_addr_nib_1_r;
     wire  [3:0] vram_addr_incr_0_r;
@@ -92,7 +92,7 @@ module top(
     wire  [7:0] vram_data0_r;
     wire  [7:0] vram_data1_r;
 
-    wire [16:0] ib_addr_r;
+    wire [18:0] ib_addr_r;
     wire        ib_addr_nibble_r;
     wire        ib_4bit_mode_r;
     wire        ib_cache_write_enabled_r;
@@ -123,6 +123,14 @@ module top(
     // [6:1]) -- DCSEL 2-6 now select the real FX registers (addr_data) and
     // DCSEL 7-63 read back the VERA version, exactly like vera-module 47.x.
     reg  [5:0] dc_select_r,                   dc_select_next;
+
+    // VERA816 extension bank, DCSEL=32 (doc/VERA816.md section 4.1). DCSEL 0-1
+    // are display control, 2-6 are VERA FX and 63 is the version registers, so
+    // 32 sits clear of all three. All power up to 0, which makes VERA816
+    // behave exactly like stock VERA until software opts in.
+    reg  [3:0] vera816_addrx_r,               vera816_addrx_next;   // [1:0] ADDR0[18:17], [3:2] ADDR1[18:17]
+    reg  [3:0] l0_basex_r,                    l0_basex_next;        // [1:0] MAPBASE[9:8], [3:2] TILEBASE[9:8]
+    reg  [3:0] l1_basex_r,                    l1_basex_next;
     reg        fpga_reconfigure_r,            fpga_reconfigure_next;
     reg        irq_enable_vsync_r,            irq_enable_vsync_next;
     reg        irq_enable_line_r,             irq_enable_line_next;
@@ -231,6 +239,7 @@ module top(
                 6'd0: rddata = {current_field, sprites_enabled_r, l1_enabled_r, l0_enabled_r, dc_progressive_r, chroma_disable_r, video_output_mode_r};
                 6'd1: rddata = dc_active_hstart_r[9:2];
                 6'd2: rddata = {fx_transparency_enabled, fx_cache_write_enabled, fx_cache_fill_enabled, fx_one_byte_cache_cycling, fx_16bit_hop, fx_4bit_mode, fx_addr1_mode};
+                6'd32: rddata = {4'b0, vera816_addrx_r};                  // VERA816 ADDRX
                 default: rddata = 8'h56; // 'V'
             endcase
         end
@@ -238,6 +247,7 @@ module top(
             case (dc_select_r)
                 6'd0: rddata = dc_hscale_r;
                 6'd1: rddata = dc_active_hstop_r[9:2];
+                6'd32: rddata = {4'b0, l0_basex_r};                       // VERA816 L0_BASEX
                 default: rddata = VERA_VERSION_MAJOR;
             endcase
         end
@@ -246,6 +256,7 @@ module top(
                 6'd0: rddata = dc_vscale_r;
                 6'd1: rddata = dc_active_vstart_r[8:1];
                 6'd5: rddata = fx_fill_length_low;
+                6'd32: rddata = {4'b0, l1_basex_r};                       // VERA816 L1_BASEX
                 default: rddata = VERA_VERSION_MINOR;
             endcase
         end
@@ -361,6 +372,9 @@ module top(
     always @* begin
         vram_addr_select_next            = vram_addr_select_r;
         dc_select_next                   = dc_select_r;
+        vera816_addrx_next               = vera816_addrx_r;
+        l0_basex_next                    = l0_basex_r;
+        l1_basex_next                    = l1_basex_r;
         fpga_reconfigure_next            = fpga_reconfigure_r;
         irq_enable_audio_fifo_low_next   = irq_enable_audio_fifo_low_r;
         irq_enable_vsync_next            = irq_enable_vsync_r;
@@ -605,6 +619,9 @@ module top(
             l0_map_height_r               <= 0;
             l0_map_width_r                <= 0;
             l0_map_baseaddr_r             <= 0;
+            vera816_addrx_r               <= 0;
+            l0_basex_r                    <= 0;
+            l1_basex_r                    <= 0;
             l0_tile_baseaddr_r            <= 0;
             l0_hscroll_r                  <= 0;
             l0_vscroll_r                  <= 0;
@@ -634,6 +651,9 @@ module top(
         end else begin
             vram_addr_select_r            <= vram_addr_select_next;
             dc_select_r                   <= dc_select_next;
+            vera816_addrx_r               <= vera816_addrx_next;
+            l0_basex_r                    <= l0_basex_next;
+            l1_basex_r                    <= l1_basex_next;
             fpga_reconfigure_r            <= fpga_reconfigure_next;
             irq_enable_audio_fifo_low_r   <= irq_enable_audio_fifo_low_next;
             irq_enable_vsync_r            <= irq_enable_vsync_next;
@@ -846,8 +866,8 @@ module top(
         .tile_width(l0_tile_width_r),
         .map_height(l0_map_height_r),
         .map_width(l0_map_width_r),
-        .map_baseaddr(l0_map_baseaddr_r),
-        .tile_baseaddr(l0_tile_baseaddr_r),
+        .map_baseaddr({l0_basex_r[1:0], l0_map_baseaddr_r}),
+        .tile_baseaddr({l0_basex_r[3:2], l0_tile_baseaddr_r}),
         .hscroll(l0_hscroll_r),
         .vscroll(l0_vscroll_r),
 
@@ -901,8 +921,8 @@ module top(
         .tile_width(l1_tile_width_r),
         .map_height(l1_map_height_r),
         .map_width(l1_map_width_r),
-        .map_baseaddr(l1_map_baseaddr_r),
-        .tile_baseaddr(l1_tile_baseaddr_r),
+        .map_baseaddr({l1_basex_r[1:0], l1_map_baseaddr_r}),
+        .tile_baseaddr({l1_basex_r[3:2], l1_tile_baseaddr_r}),
         .hscroll(l1_hscroll_r),
         .vscroll(l1_vscroll_r),
 

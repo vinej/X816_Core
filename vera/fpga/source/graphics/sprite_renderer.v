@@ -14,7 +14,7 @@ module sprite_renderer(
     input  wire        frame_done,
 
     // Bus master interface
-    output wire [14:0] bus_addr,
+    output wire [16:0] bus_addr,   // VERA816: 17-bit word address
     input  wire [31:0] bus_rddata,
     output wire        bus_strobe,
     input  wire        bus_ack,
@@ -237,14 +237,14 @@ module sprite_renderer(
     wire [5:0] hflipped_xcnt_next = sprite_hflip_r ? ~xcnt_next : xcnt_next;
 
     // Determine address of current sprite line
-    reg [14:0] line_addr_tmp;
+    reg [16:0] line_addr_tmp;
     always @* case (sprite_width_r)
         2'd0: line_addr_tmp = sprite_mode_r ? {8'b0, sprite_line_r, hflipped_xcnt_next[  2]} : {9'b0, sprite_line_r                         }; //  8 pixels
         2'd1: line_addr_tmp = sprite_mode_r ? {7'b0, sprite_line_r, hflipped_xcnt_next[3:2]} : {8'b0, sprite_line_r, hflipped_xcnt_next[  3]}; // 16 pixels
         2'd2: line_addr_tmp = sprite_mode_r ? {6'b0, sprite_line_r, hflipped_xcnt_next[4:2]} : {7'b0, sprite_line_r, hflipped_xcnt_next[4:3]}; // 32 pixels
         2'd3: line_addr_tmp = sprite_mode_r ? {5'b0, sprite_line_r, hflipped_xcnt_next[5:2]} : {6'b0, sprite_line_r, hflipped_xcnt_next[5:3]}; // 64 pixels
     endcase
-    wire [14:0] line_addr = {sprite_addr_r, 3'b0} + line_addr_tmp;
+    wire [16:0] line_addr = {sprite_addr_r, 3'b0} + line_addr_tmp;
 
     // State machine states
     parameter
@@ -255,7 +255,7 @@ module sprite_renderer(
 
     // Registers used by state machine
     reg  [1:0] state_r,        state_next;
-    reg [14:0] bus_addr_r,     bus_addr_next;
+    reg [16:0] bus_addr_r,     bus_addr_next;
     reg        bus_strobe_r,   bus_strobe_next;
     reg [31:0] render_data_r,  render_data_next;
     reg  [9:0] linebuf_idx_r,  linebuf_idx_next;

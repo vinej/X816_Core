@@ -16,13 +16,13 @@ module layer_renderer(
     input  wire        tile_width,
     input  wire  [1:0] map_height,
     input  wire  [1:0] map_width,
-    input  wire  [7:0] map_baseaddr,
-    input  wire  [7:0] tile_baseaddr,
+    input  wire  [9:0] map_baseaddr,     // VERA816: 10 bits, reaches 17-bit word space
+    input  wire  [9:0] tile_baseaddr,    // VERA816: 10 bits
     input  wire [11:0] hscroll,
     input  wire [11:0] vscroll,
 
     // Bus master interface
-    output reg  [14:0] bus_addr,
+    output reg  [16:0] bus_addr,          // VERA816: 17-bit word address
     input  wire [31:0] bus_rddata,
     output wire        bus_strobe,
     input  wire        bus_ack,
@@ -104,7 +104,7 @@ module layer_renderer(
     endcase
 
     // Calculate map address
-    wire [14:0] map_addr = {map_baseaddr, 7'b0} + map_idx[15:1];
+    wire [16:0] map_addr = {map_baseaddr, 7'b0} + map_idx[15:1];
 
     // Data as fetched from memory
     reg  [31:0] map_data_r;
@@ -185,18 +185,27 @@ module layer_renderer(
     endcase
 
     // Calculate actual tile address
-    wire [14:0] tile_addr = {tile_baseaddr, 7'b0} + tile_addr_xbpp;
+    wire [16:0] tile_addr = {tile_baseaddr, 7'b0} + tile_addr_xbpp;
 
     // Calculate bitmap line address
+    //
+    // VERA816: this is the change that actually unblocks 640x480 8bpp, and it
+    // is not about VRAM size.  line_idx_mul5 is 12 bits (line_idx * 5), but
+    // stock VERA truncated it to fit a 15-bit result -- the 8bpp/640-wide case
+    // kept only [9:0], so the address wrapped once line_idx*5 >= 1024, i.e.
+    // after line 204.  Stock VERA cannot scan out 640x480 8bpp even with
+    // unlimited VRAM.  Widening the result to 17 bits lets every case keep all
+    // 12 bits.  See doc/VERA816.md section 5; the emulator computes this in
+    // 32-bit and never had the truncation, so it is already the reference.
     wire [11:0] line_idx_mul5 = {3'b0, line_idx} + {1'b0, line_idx, 2'b0};
-    reg  [14:0] bm_line_addr_tmp;
+    reg  [16:0] bm_line_addr_tmp;
     always @* case (color_depth)
-        2'd0: bm_line_addr_tmp = tile_width ? {1'b0, line_idx_mul5, 2'b0} : {2'b0, line_idx_mul5, 1'b0}; // 1bpp
-        2'd1: bm_line_addr_tmp = tile_width ? {      line_idx_mul5, 3'b0} : {1'b0, line_idx_mul5, 2'b0}; // 2bpp
-        2'd2: bm_line_addr_tmp = tile_width ? {line_idx_mul5[10:0], 4'b0} : {      line_idx_mul5, 3'b0}; // 4bpp
-        2'd3: bm_line_addr_tmp = tile_width ? {line_idx_mul5[9:0],  5'b0} : {line_idx_mul5[10:0], 4'b0}; // 8bpp
+        2'd0: bm_line_addr_tmp = tile_width ? {line_idx_mul5, 2'b0} : {line_idx_mul5, 1'b0}; // 1bpp
+        2'd1: bm_line_addr_tmp = tile_width ? {line_idx_mul5, 3'b0} : {line_idx_mul5, 2'b0}; // 2bpp
+        2'd2: bm_line_addr_tmp = tile_width ? {line_idx_mul5, 4'b0} : {line_idx_mul5, 3'b0}; // 4bpp
+        2'd3: bm_line_addr_tmp = tile_width ? {line_idx_mul5, 5'b0} : {line_idx_mul5, 4'b0}; // 8bpp
     endcase
-    wire [14:0] bitmap_line_addr = {tile_baseaddr, 7'b0} + bm_line_addr_tmp;
+    wire [16:0] bitmap_line_addr = {tile_baseaddr, 7'b0} + bm_line_addr_tmp;
 
     // Generate bus strobe
     reg bus_strobe_r;
@@ -214,7 +223,7 @@ module layer_renderer(
 
     // Various registers used by state machine
     reg [31:0] tile_data_r, render_data_r;
-    reg [14:0] bitmap_addr_r;
+    reg [16:0] bitmap_addr_r;
     reg  [7:0] next_render_mapdata_r;
     reg  [7:0] render_mapdata_r;
     reg        render_start;

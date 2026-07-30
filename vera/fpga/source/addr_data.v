@@ -19,8 +19,8 @@ module addr_data(
     input wire         vram_addr_select,
     input wire   [5:0] dc_select,
 
-    output wire [16:0] vram_addr_0,
-    output wire [16:0] vram_addr_1,
+    output wire [18:0] vram_addr_0,
+    output wire [18:0] vram_addr_1,
     output wire        vram_addr_nib_0,
     output wire        vram_addr_nib_1,
     output wire  [3:0] vram_addr_incr_0,
@@ -32,7 +32,7 @@ module addr_data(
     output wire  [7:0] vram_data0,
     output wire  [7:0] vram_data1,
 
-    output wire [16:0] ib_addr,
+    output wire [18:0] ib_addr,
     output wire        ib_addr_nibble,
     output wire        ib_4bit_mode,
     output wire        ib_cache_write_enabled,
@@ -61,8 +61,8 @@ module addr_data(
     // Bus accessible registers
     //////////////////////////////////////////////////////////////////////////
 
-    reg [16:0] vram_addr_0_r,                 vram_addr_0_next;
-    reg [16:0] vram_addr_1_r,                 vram_addr_1_next;
+    reg [18:0] vram_addr_0_r,                 vram_addr_0_next;
+    reg [18:0] vram_addr_1_r,                 vram_addr_1_next;
     reg        vram_addr_nib_0_r,             vram_addr_nib_0_next;
     reg        vram_addr_nib_1_r,             vram_addr_nib_1_next;
     reg  [3:0] vram_addr_incr_0_r,            vram_addr_incr_0_next;
@@ -87,7 +87,7 @@ module addr_data(
     assign vram_data0 = vram_data0_r;
     assign vram_data1 = vram_data1_r;
 
-    reg  [16:0] ib_addr_r,                   ib_addr_next;
+    reg  [18:0] ib_addr_r,                   ib_addr_next;
     reg         ib_addr_nibble_r,            ib_addr_nibble_next;
     reg         ib_4bit_mode_r,              ib_4bit_mode_next;
     reg         ib_cache_write_enabled_r,    ib_cache_write_enabled_next;
@@ -281,9 +281,9 @@ module addr_data(
     end
 
     // Note: we are sign extending here, since it might be a negative number
-    wire [16:0] vram_addr_0_incr_decr_0  = vram_addr_0_r + { {6{incr_decr_0[10]}}, incr_decr_0};
-    wire [16:0] vram_addr_1_incr_decr_1  = vram_addr_1_r + { {6{incr_decr_1[10]}}, incr_decr_1};
-    wire [16:0] vram_addr_1_incr_decr_10 = vram_addr_1_incr_decr_1 + { {6{incr_decr_0[10]}}, incr_decr_0};
+    wire [18:0] vram_addr_0_incr_decr_0  = vram_addr_0_r + { {8{incr_decr_0[10]}}, incr_decr_0};
+    wire [18:0] vram_addr_1_incr_decr_1  = vram_addr_1_r + { {8{incr_decr_1[10]}}, incr_decr_1};
+    wire [18:0] vram_addr_1_incr_decr_10 = vram_addr_1_incr_decr_1 + { {8{incr_decr_0[10]}}, incr_decr_0};
 
      // We *flip* the nibble-bit if a nibble-incrementer is active
     wire        vram_addr_nib_0_incr_decr_0  = vram_addr_nib_0_r ^ (fx_4bit_mode_r && vram_addr_nib_incr_0_r && !vram_addr_incr_0_r);
@@ -304,19 +304,19 @@ module addr_data(
     reg         fx_calculate_addr1_based_on_position_r, fx_calculate_addr1_based_on_position_next;
     reg         fx_increment_on_overflow_r, fx_increment_on_overflow_next;
 
-    reg  [16:0] vram_addr_0_untouched_or_set;
+    reg  [18:0] vram_addr_0_untouched_or_set;
     reg         vram_addr_0_untouched_or_set_bit16;
     reg         vram_addr_0_untouched_or_set_nibble;
     reg   [7:0] vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low;
 
-    reg  [16:0] vram_addr_1_untouched_or_set;
+    reg  [18:0] vram_addr_1_untouched_or_set;
     reg         vram_addr_1_untouched_or_set_bit16;
     reg         vram_addr_1_untouched_or_set_nibble;
     reg   [7:0] vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low;
 
-    reg  [16:0] vram_addr_1_tileindex_lookup;
-    reg  [16:0] vram_addr_1_tiledata_using_tilemap;
-    reg  [16:0] vram_addr_1_start_of_horizontal_fill_line;
+    reg  [18:0] vram_addr_1_tileindex_lookup;
+    reg  [18:0] vram_addr_1_tiledata_using_tilemap;
+    reg  [18:0] vram_addr_1_start_of_horizontal_fill_line;
     reg         vram_addr_nib_1_tiledata_using_tilemap;
     reg         vram_addr_nib_1_start_of_horizontal_fill_line;
 
@@ -337,7 +337,7 @@ module addr_data(
     reg  [2:0]  fx_vram_addr_1_needs_to_be_changed;
     reg         fx_pixel_position_needs_to_be_updated;
 
-    wire [16:0] vram_addr             = (access_addr == 5'h03) ? vram_addr_0_r : vram_addr_1_r;
+    wire [18:0] vram_addr             = (access_addr == 5'h03) ? vram_addr_0_r : vram_addr_1_r;
     wire is_audio_address             = (vram_addr[16:6]  == 'b11111100111);
     wire is_palette_address           = (vram_addr[16:9]  == 'b11111101);
     wire is_sprite_attr_address       = (vram_addr[16:10] == 'b1111111);
