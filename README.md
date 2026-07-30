@@ -87,7 +87,24 @@ constraints in [rtl/flat_sdram.sv](rtl/flat_sdram.sv): the `ready` cone that
 must not compare live address bits, the `| we` term the '816's global clock
 enable depends on, and consume-clear read delivery.
 
-Not yet exercised on hardware: the keyboard, audio, and the SD card.
+**The keyboard works.** `boot/kbd.s` bit-bangs I2C on VIA1 port A, reads the
+SMC's keycode FIFO (command `$07`) and echoes to the screen -- confirmed on
+hardware. That exercises the whole chain: USB keyboard -> `hps_io` ->
+`ps2_to_smc_bridge` -> `smc_x16` (I2C slave `$42`) -> VIA1 -> software.
+
+Two things about the SMC that cost real time and are not obvious:
+
+* The command write must be terminated with a **full STOP, not a repeated
+  START**. `rtl/smc_x16.sv` documents this at lines 68-71 -- the real SMC
+  firmware early-returns for one-byte writes, leaving the command armed for a
+  separate read transaction. A repeated START never arms it and every read
+  returns `$FE`.
+* It emits **IBM System/2 keycodes**, not PS/2 scancodes -- `A` is `$1F`,
+  space is `$3D`, and bit 7 is the release flag. The translation table lives
+  in `rtl/smc_x16.sv`; `boot/kbd.s` carries the inverse, extracted from it
+  rather than guessed.
+
+Not yet exercised on hardware: audio and the SD card.
 
 ## Running a program
 
