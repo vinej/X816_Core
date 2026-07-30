@@ -58,11 +58,11 @@ an error:
   that regenerated the `.rbf` **without the new contents** — reporting success
   in about a minute and emitting a byte-identical file. A conformance-test
   build came out as the previous demo.
-* After an RTL change, an incremental full compile reported 0 errors and a
-  clean fit, but produced a bitstream that **did not work on hardware**.
-  *(Cause not yet isolated — it is either the incremental flow or the RTL
-  change itself. A clean rebuild of the same source is the experiment that
-  separates them.)*
+That is the only confirmed case. A second suspected one turned out to be a
+genuine RTL bug rather than a build problem: a clean rebuild produced a
+bit-for-bit identical bitstream to the incremental one, so the incremental
+flow was exonerated. Worth remembering in both directions — rebuild cleanly
+to *rule out* the build, then believe the result.
 
 So: `rm -rf db incremental_db` before every compile that matters, and **verify
 the output actually changed** before flashing it:
