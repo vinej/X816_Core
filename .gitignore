@@ -49,3 +49,6 @@ boot/sdramtest.o
 boot/sdramtest.rom
 boot/loadtest.o
 boot/loadtest.bin
+boot/hello.o
+boot/hello.bin
+boot/mini.*
