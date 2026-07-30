@@ -89,9 +89,37 @@ enable depends on, and consume-clear read delivery.
 
 Not yet exercised on hardware: the keyboard, audio, and the SD card.
 
-Loading a program: OSD **Load Image** (or `boot1.rom` in the core's folder).
-The file's byte offset is its flat address, so an image linked for `$01:0000`
-should be padded or linked accordingly.
+## Running a program
+
+Programs load at `PROG_BASE` = `$01:0000`, the first SDRAM bank. The boot stub
+looks for the four-byte magic `X816` there and jumps to `$01:0004`; without it
+the bands demo runs instead, so a core with nothing loaded still shows life.
+
+Load with the OSD **Load Image** entry, or drop the image in the core's folder
+as `boot1.rom` for auto-load at core start. The RTL adds `PROG_BASE` to the
+file offset, so a program links at `$01:0004` and loads from offset 0 — no
+padding.
+
+```sh
+cd boot
+ca65 --cpu 65816 hello.s -o hello.o
+ld65 -C prog.cfg hello.o -o hello.bin      # -> load this
+```
+
+**`boot/hello.s` is confirmed working on hardware and the emulator** — 80×60
+VERA text mode at 640×480, with `putc`/`puts`/`cls`/`newline` and an 8×8 font
+uploaded to VRAM. It runs in place from SDRAM, so every instruction fetch goes
+through the CPU stall path.
+
+Two things bite every program that runs outside bank `$00`, both learned the
+hard way in `hello.s`:
+
+* **Data access needs long addressing.** DBR stays `$00` so the I/O page at
+  `$9Fxx` is reachable, which means a program's *own* data is not where plain
+  absolute addressing looks. Use `f:label,x` and `[ptr],y`. This is what
+  Calypsi's `__far24` handles for you.
+* **Watch direct-page overlap.** A 3-byte long pointer at `$12` occupies
+  `$12-$14`; putting a scratch byte at `$14` silently corrupts its bank.
 
 ## License
 
