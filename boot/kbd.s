@@ -31,6 +31,8 @@ SMC_GETKEY     = $07            ; pop one keycode, 0 if the FIFO is empty
 i2c_byte       = $16
 i2c_cnt        = $17
 keycode        = $18
+lastkey        = $19            ; last non-zero byte seen, latched for display
+beat           = $1A            ; poll counter, proves the loop is alive
 
 .segment "MAGIC"
         .byte   "X816"
@@ -54,15 +56,26 @@ start:
         ; ORA = 0 once: from here, DDRA alone decides drive-low vs release.
         stz     VIA1_PA
         stz     VIA1_DDRA               ; both lines released (high)
+        stz     lastkey
+        stz     beat
 
 poll:
         jsr     smc_getkey
         sta     keycode
 
-        ; ---- diagnostic: show the raw byte the SMC returned ----------------
-        ; "00" forever means I2C works but the FIFO is empty -- look upstream
-        ; at ps2_to_smc_bridge / hps_io. "FF" means nobody is driving the bus,
-        ; i.e. the I2C transaction is not reaching the slave at all.
+        ; ---- diagnostic ----------------------------------------------------
+        ; The instantaneous value is useless: polling runs ~1000x/second, so a
+        ; keypress would flash for a millisecond. LATCH the last non-zero byte
+        ; instead, and show a heartbeat so a stalled loop is distinguishable
+        ; from a silent one.
+        ;   left pair  = last non-zero keycode ("00" = none ever seen)
+        ;   right pair = heartbeat, must be counting
+        lda     keycode
+        beq     @nolatch
+        sta     lastkey
+@nolatch:
+        inc     beat
+
         lda     curx                    ; save the echo cursor
         pha
         lda     cury
@@ -70,7 +83,11 @@ poll:
         ldx     #0                      ; diagnostic lives at 0,0
         ldy     #0
         jsr     gotoxy
-        lda     keycode
+        lda     lastkey
+        jsr     puthex
+        lda     #' '
+        jsr     putc
+        lda     beat
         jsr     puthex
         pla                             ; restore it
         sta     cury
