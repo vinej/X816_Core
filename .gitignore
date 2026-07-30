@@ -52,3 +52,5 @@ boot/loadtest.bin
 boot/hello.o
 boot/hello.bin
 boot/mini.*
+boot/kbd.o
+boot/kbd.bin
