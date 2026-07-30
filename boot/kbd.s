@@ -112,15 +112,27 @@ poll:
         bne     poll                    ; bit 7 set = key release, ignore
         sta     lastpress               ; got a press
 
-        ; keycode -> ASCII. Force the index to 8 bits: with M=1 and X=0, TAX
-        ; would move the whole 16-bit C including the hidden B register.
+        ; keycode -> ASCII.
+        ;
+        ; TAX moves the FULL 16-bit C when the index registers are 16 bits, so
+        ; the hidden B register lands in X's high byte and the lookup indexes
+        ; far outside the table. Narrowing the INDEX registers for the lookup
+        ; fixes that at the source.
+        ;
+        ; The previous attempt -- rep #$20 / and #$00FF -- did not work, and
+        ; the reason is worth remembering: ca65 tracks the M/X flags from the
+        ; .a8/.a16/.i8/.i16 DIRECTIVES, not from rep/sep instructions. With
+        ; .a8 still in force it assembled `and #$FF` as an 8-bit immediate,
+        ; so at runtime, with A genuinely 16-bit, the high byte was never
+        ; masked. Always pair a rep/sep with the matching directive.
         cmp     #64
         bcs     poll                    ; out of table range
-        rep     #$20
-        and     #$00FF
-        tax
-        sep     #$20
+        sep     #$10                    ; 8-bit index registers
+.i8
+        tax                             ; A and X both 8-bit: a clean transfer
         lda     f:keymap,x
+        rep     #$10                    ; back to 16-bit for the text layer
+.i16
         beq     poll                    ; unmapped key
         sta     lastascii               ; got an ASCII char
         cmp     #$0D
