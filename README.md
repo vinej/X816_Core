@@ -38,7 +38,6 @@ I/O page:
 ## Build
 
 ```sh
-rm -rf db incremental_db               # see the warning below -- do not skip
 quartus_sh --flow compile X816.qpf     # bitstream -> output_files/X816.rbf
 
 sh boot/build.sh                       # boot.hex <- the bands demo (needs cc65)
@@ -48,54 +47,36 @@ sh boot/build.sh vramtest              # boot.hex <- the VERA816 conformance tes
 `boot/boot.hex` is committed, so the bitstream builds with no toolchain
 installed.
 
-### Always clean before compiling
-
-**Quartus's incremental flow is not trustworthy in this project.** It has
-produced a wrong bitstream twice, in two different ways, and neither reported
-an error:
-
-* After changing `boot/boot.hex`, Quartus took a *"MIF/HEX Update"* fast path
-  that regenerated the `.rbf` **without the new contents** — reporting success
-  in about a minute and emitting a byte-identical file. A conformance-test
-  build came out as the previous demo.
-That is the only confirmed case. A second suspected one turned out to be a
-genuine RTL bug rather than a build problem: a clean rebuild produced a
-bit-for-bit identical bitstream to the incremental one, so the incremental
-flow was exonerated. Worth remembering in both directions — rebuild cleanly
-to *rule out* the build, then believe the result.
-
-So: `rm -rf db incremental_db` before every compile that matters, and **verify
-the output actually changed** before flashing it:
-
-```sh
-md5sum output_files/X816.rbf            # compare against the previous build
-```
-
-A five-minute rebuild is cheaper than debugging a bitstream that isn't the one
-you think you are running.
-
 ## What it does today
 
-**Confirmed working on real hardware** (DE10-Nano, 2026-07-30), and matching
-the emulator pixel for pixel.
+**VERA816 is confirmed on real hardware.** `sh boot/build.sh vramtest` builds a
+bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)
+— green on pass, red on fail — and it comes up green on a DE10-Nano as well as
+on the emulator. That proves the full 352 KB is addressable, the 19-bit path
+works including bits 17 and 18, the unpopulated region reads zero without
+aliasing, auto-increment wraps, and `VRAMCAP` reads 22.
+
+> **KNOWN BUG — the bands demo currently hangs the board.** It ran correctly
+> on the pre-ADDRX build, and it still runs correctly in the emulator, but with
+> the current RTL it produces a black screen and takes the whole MiSTer down
+> (the OSD dies too, so a power cycle is needed). Under investigation. Ruled
+> out so far: the incremental build flow (a clean rebuild is bit-identical),
+> the address-register resets (both are reset to 0), and the one combinational
+> loop in the design (it is in the framework's `vga_out`, pre-existing).
+>
+> The conformance test masks whatever it is, because `vramtest.s` explicitly
+> writes `ADDRX = 0` while `boot.s` never touches it and relies on reset.
 
 Power-on runs the boot stub: enters native mode, sets up S/D/DBR, copies
 itself into RAM and drops the ROM overlay, then brings VERA up in 320×240 8bpp
 bitmap mode and paints horizontal colour bands. That is a font-free proof that
 the CPU, native mode, the flat bus, the I/O decode and video all work.
 
-That one result validates the PLL frequencies, native-mode entry, the boot
+On the build where it worked, that one result validated the PLL frequencies, native-mode entry, the boot
 overlay's self-copy and its `SYSCTL` unmapping mid-instruction-stream, bank-0
 BRAM, the VERA bus pipeline and the MiSTer video path — and, because this
 bitstream carries the 352 KB VERA816 widening, that the widening did not break
 stock VERA behaviour.
-
-**VERA816 is also confirmed on hardware.** `sh boot/build.sh vramtest` builds a
-bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)
-— green on pass, red on fail — and it comes up green on a DE10-Nano as well as
-on the emulator. That proves the full 352 KB is addressable, the 19-bit path
-works including bits 17 and 18, the unpopulated region reads zero without
-aliasing, auto-increment wraps, and `VRAMCAP` reads 22.
 
 Not yet exercised on hardware: **SDRAM** — the boot stub runs entirely in bank
 `$00`, which is BRAM, so 15.9 MB of the 16 MB address space has never served a
