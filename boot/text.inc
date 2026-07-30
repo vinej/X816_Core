@@ -171,4 +171,32 @@ puts:
         bra     @l
 @end:   rts
 
+; ----------------------------------------------------------------------------
+; puthex -- print A as two hex digits.
+; ----------------------------------------------------------------------------
+puthex:
+        pha
+        lsr     a
+        lsr     a
+        lsr     a
+        lsr     a
+        jsr     @nyb
+        pla
+@nyb:   and     #$0F
+        cmp     #10
+        bcc     @dig
+        adc     #6                      ; carry is set, so +7 total -> 'A'..'F'
+@dig:   adc     #'0'
+        jmp     putc
+
+; ----------------------------------------------------------------------------
+; gotoxy -- set the cursor from X (col) and Y (row), both 8-bit values in the
+; low byte of the 16-bit index registers.
+; ----------------------------------------------------------------------------
+gotoxy:
+        stx     curx
+        sty     cury
+        rts
+
         .include "font8x8.inc"
+

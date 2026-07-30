@@ -49,6 +49,7 @@ start:
         jsr     puts
         jsr     newline
         jsr     newline
+        jsr     newline                 ; leave rows 0-2 for the diagnostic
 
         ; ORA = 0 once: from here, DDRA alone decides drive-low vs release.
         stz     VIA1_PA
@@ -56,14 +57,39 @@ start:
 
 poll:
         jsr     smc_getkey
+        sta     keycode
+
+        ; ---- diagnostic: show the raw byte the SMC returned ----------------
+        ; "00" forever means I2C works but the FIFO is empty -- look upstream
+        ; at ps2_to_smc_bridge / hps_io. "FF" means nobody is driving the bus,
+        ; i.e. the I2C transaction is not reaching the slave at all.
+        lda     curx                    ; save the echo cursor
+        pha
+        lda     cury
+        pha
+        ldx     #0                      ; diagnostic lives at 0,0
+        ldy     #0
+        jsr     gotoxy
+        lda     keycode
+        jsr     puthex
+        pla                             ; restore it
+        sta     cury
+        pla
+        sta     curx
+
+        lda     keycode
         beq     poll                    ; 0 = FIFO empty
         bit     #$80
         bne     poll                    ; bit 7 set = key release, ignore
 
-        ; keycode -> ASCII
+        ; keycode -> ASCII. Force the index to 8 bits: with M=1 and X=0, TAX
+        ; would move the whole 16-bit C including the hidden B register.
         cmp     #64
         bcs     poll                    ; out of table range
+        rep     #$20
+        and     #$00FF
         tax
+        sep     #$20
         lda     f:keymap,x
         beq     poll                    ; unmapped key
         cmp     #$0D
@@ -78,8 +104,14 @@ banner: .byte   "X816 KEYBOARD - TYPE SOMETHING", 0
 ; ----------------------------------------------------------------------------
 ; smc_getkey -- I2C read of SMC register $07. Returns the keycode in A.
 ;
-;   START, write $42<<1|W, write $07, REPEATED START, write $42<<1|R,
-;   read one byte with NACK, STOP.
+;   START, write $42<<1|W, write $07, STOP,
+;   START, write $42<<1|R, read one byte with NACK, STOP.
+;
+; NOTE the full STOP between the command and the read -- NOT a repeated
+; START. rtl/smc_x16.sv documents this: the real SMC firmware's I2C_Receive
+; early-returns for one-byte writes, leaving the command armed for a separate
+; read transaction. That is how the X16 KERNAL drives it, and a repeated
+; START does not arm the command.
 ; ----------------------------------------------------------------------------
 smc_getkey:
         jsr     i2c_start
@@ -87,7 +119,8 @@ smc_getkey:
         jsr     i2c_write
         lda     #SMC_GETKEY
         jsr     i2c_write
-        jsr     i2c_start               ; repeated start
+        jsr     i2c_stop                ; full STOP, command stays armed
+        jsr     i2c_start
         lda     #(SMC_ADDR << 1) | 1    ; read
         jsr     i2c_write
         jsr     i2c_read_nak
