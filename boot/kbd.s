@@ -31,7 +31,9 @@ SMC_GETKEY     = $07            ; pop one keycode, 0 if the FIFO is empty
 i2c_byte       = $16
 i2c_cnt        = $17
 keycode        = $18
-lastkey        = $19            ; last non-zero byte seen, latched for display
+lastkey        = $19            ; last non-zero raw byte from the SMC
+lastpress      = $1B            ; last byte with bit 7 CLEAR (a press)
+lastascii      = $1C            ; last non-zero keymap lookup
 beat           = $1A            ; poll counter, proves the loop is alive
 
 .segment "MAGIC"
@@ -57,6 +59,8 @@ start:
         stz     VIA1_PA
         stz     VIA1_DDRA               ; both lines released (high)
         stz     lastkey
+        stz     lastpress
+        stz     lastascii
         stz     beat
 
 poll:
@@ -83,7 +87,15 @@ poll:
         ldx     #0                      ; diagnostic lives at 0,0
         ldy     #0
         jsr     gotoxy
-        lda     lastkey
+        lda     lastkey                 ; raw byte from the SMC
+        jsr     puthex
+        lda     #' '
+        jsr     putc
+        lda     lastpress               ; last PRESS (bit 7 clear)
+        jsr     puthex
+        lda     #' '
+        jsr     putc
+        lda     lastascii               ; last keymap hit
         jsr     puthex
         lda     #' '
         jsr     putc
@@ -98,6 +110,7 @@ poll:
         beq     poll                    ; 0 = FIFO empty
         bit     #$80
         bne     poll                    ; bit 7 set = key release, ignore
+        sta     lastpress               ; got a press
 
         ; keycode -> ASCII. Force the index to 8 bits: with M=1 and X=0, TAX
         ; would move the whole 16-bit C including the hidden B register.
@@ -109,6 +122,7 @@ poll:
         sep     #$20
         lda     f:keymap,x
         beq     poll                    ; unmapped key
+        sta     lastascii               ; got an ASCII char
         cmp     #$0D
         bne     @notcr
         jsr     newline
