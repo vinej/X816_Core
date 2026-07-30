@@ -195,6 +195,13 @@ recovered without dropping FX.
 
 ## 8. Conformance tests
 
+> **Status: PASSING on both implementations as of 2026-07-30.**
+> `boot/vramtest.s` implements all five and paints green on pass, red on fail.
+> Verified green on the emulator and on a DE10-Nano. Build the test bitstream
+> with `sh boot/build.sh vramtest` — and read the warning in that script about
+> Quartus's hex-update fast path first, or you will flash a bitstream that
+> still contains the previous boot ROM.
+
 Both implementations must pass identically before any application software is
 written against VERA816.
 

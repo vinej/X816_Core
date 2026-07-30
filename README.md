@@ -61,8 +61,16 @@ BRAM, the VERA bus pipeline and the MiSTer video path — and, because this
 bitstream carries the 352 KB VERA816 widening, that the widening did not break
 stock VERA behaviour.
 
-Not yet exercised on hardware: SDRAM (the stub runs entirely in bank `$00`,
-which is BRAM), the keyboard, audio, and VRAM above 128 KB.
+**VERA816 is also confirmed on hardware.** `sh boot/build.sh vramtest` builds a
+bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)
+— green on pass, red on fail — and it comes up green on a DE10-Nano as well as
+on the emulator. That proves the full 352 KB is addressable, the 19-bit path
+works including bits 17 and 18, the unpopulated region reads zero without
+aliasing, auto-increment wraps, and `VRAMCAP` reads 22.
+
+Not yet exercised on hardware: **SDRAM** — the boot stub runs entirely in bank
+`$00`, which is BRAM, so 15.9 MB of the 16 MB address space has never served a
+CPU access on silicon — along with the keyboard and audio.
 
 Loading a program: OSD **Load Image** (or `boot1.rom` in the core's folder).
 The file's byte offset is its flat address, so an image linked for `$01:0000`
