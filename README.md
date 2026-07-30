@@ -47,10 +47,22 @@ installed.
 
 ## What it does today
 
+**Confirmed working on real hardware** (DE10-Nano, 2026-07-30), and matching
+the emulator pixel for pixel.
+
 Power-on runs the boot stub: enters native mode, sets up S/D/DBR, copies
 itself into RAM and drops the ROM overlay, then brings VERA up in 320×240 8bpp
 bitmap mode and paints horizontal colour bands. That is a font-free proof that
 the CPU, native mode, the flat bus, the I/O decode and video all work.
+
+That one result validates the PLL frequencies, native-mode entry, the boot
+overlay's self-copy and its `SYSCTL` unmapping mid-instruction-stream, bank-0
+BRAM, the VERA bus pipeline and the MiSTer video path — and, because this
+bitstream carries the 352 KB VERA816 widening, that the widening did not break
+stock VERA behaviour.
+
+Not yet exercised on hardware: SDRAM (the stub runs entirely in bank `$00`,
+which is BRAM), the keyboard, audio, and VRAM above 128 KB.
 
 Loading a program: OSD **Load Image** (or `boot1.rom` in the core's folder).
 The file's byte offset is its flat address, so an image linked for `$01:0000`
