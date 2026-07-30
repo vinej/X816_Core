@@ -8,17 +8,19 @@
 # with $readmemh.  boot.hex is committed so a plain `quartus_sh --flow compile`
 # works with no cc65 installed.
 #
-# *** IMPORTANT ***  Changing boot.hex is NOT enough on its own.  Quartus's
-# incremental flow will take a "MIF/HEX Update" fast path that regenerates the
-# bitstream WITHOUT picking up the new contents -- it reports success in about
-# a minute and produces a byte-identical .rbf.  Always force a full rebuild:
+# *** WHY THIS SCRIPT TOUCHES rtl/boot_rom.sv ***
 #
-#     rm -rf db incremental_db
-#     quartus_sh --flow compile X816.qpf
+# boot.hex is not a project source: it appears nowhere in files.qip or
+# X816.qsf, only inside the $readmemh string in rtl/boot_rom.sv.  Quartus
+# therefore has no dependency on it, and smart-recompile sees no changed
+# source file -- so `quartus_sh --flow compile` skips Analysis & Synthesis and
+# the OLD memory contents stay baked into the bitstream.  It reports success,
+# and the .rbf is byte-identical to the previous build.
 #
-# and verify the result actually changed:
-#
-#     cmp output_files/X816.rbf releases/X816_bands.rbf
+# $readmemh contents are captured during synthesis, not at assembly time, so
+# the fix is to force re-synthesis of the module that reads the file.  Touching
+# boot_rom.sv does exactly that, and only that -- far cheaper than deleting
+# db/ and incremental_db/, which forces a full rebuild of everything.
 #
 set -e
 cd "$(dirname "$0")"
@@ -34,3 +36,7 @@ size=$(wc -c < "$SRC.rom")
 
 od -An -v -tx1 "$SRC.rom" | tr -s ' ' '\n' | grep -v '^$' > boot.hex
 echo "boot.hex <- $SRC.rom ($(wc -l < boot.hex) bytes)"
+
+# Give Quartus a dependency it can actually see (see the note above).
+touch ../rtl/boot_rom.sv
+echo "touched rtl/boot_rom.sv so Quartus re-reads boot.hex"
