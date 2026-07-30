@@ -75,11 +75,15 @@ DCSEL allocation in the base design:
 | 0, 1 | display composer (stock) |
 | 2-6 | **VERA FX** (`addr_data.v` lines 629-764) |
 | 7-62 | unused |
-| **63** | **VERA816 extensions** |
+| **32** | **VERA816 extensions** |
+| 63 | **version registers** `DC_VER0-3` — reads return the VERA version string |
 
-DCSEL 63 (`6'h3F`) is chosen to stay clear of any future upstream FX expansion.
+DCSEL **32** (`6'h20`) is used. Note that 63 is *not* free despite looking
+unused: it holds the version registers, which is why a stock DCSEL read falls
+through to `vera_version_string[i % 4]`. 32 sits clear of both FX below and the
+version bank above, with room either side.
 
-### 4.1 DCSEL = 63 register bank
+### 4.1 DCSEL = 32 register bank
 
 | Address | Name | Bits |
 |---|---|---|
@@ -147,7 +151,7 @@ line 204 of an 8bpp bitmap.
 |---|---|
 | `vera/fpga/source/main_ram.v` | see §7 |
 | `vera/fpga/source/vram_if.v` | `if0_addr` 17→19 (CPU byte), `if1_addr`/`if2_addr`/`if3_addr` 15→17 (word) |
-| `vera/fpga/source/top.v` | `vram_addr_0_r`/`vram_addr_1_r` 17→19; DCSEL-63 decode; `l0/l1_map_baseaddr` and `l0/l1_tile_baseaddr` 8→10 bits |
+| `vera/fpga/source/top.v` | `vram_addr_0_r`/`vram_addr_1_r` 17→19; DCSEL-32 decode; `l0/l1_map_baseaddr` and `l0/l1_tile_baseaddr` 8→10 bits |
 | `vera/fpga/source/graphics/layer_renderer.v` | `bus_addr` 15→17; `map_addr`/`tile_addr` 15→17; §5 fix |
 | `vera/fpga/source/graphics/sprite_renderer.v` | `bus_addr` 15→17 |
 
