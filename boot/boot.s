@@ -14,9 +14,11 @@
 ;   3. COPIES ITSELF into the RAM underneath the overlay, then drops the
 ;      overlay -- from that point bank 0 is 64 KB of uniform RAM, the vector
 ;      table lives in RAM and is patchable, and the machine is genuinely flat
-;   4. brings VERA up in 320x240 8bpp bitmap mode and paints horizontal bands
-;      -- a font-free proof that CPU, flat bus, I/O decode and video all work
-;   5. parks in WAI
+;   4. if a program with the "X816" magic is present at PROG_BASE, jumps to
+;      it and never returns -- the program runs in place from SDRAM
+;   5. otherwise brings VERA up in 320x240 8bpp bitmap mode and paints
+;      horizontal bands, a font-free proof that CPU, flat bus, I/O decode and
+;      video all work, then parks in WAI
 ;
 ; Step 3 is the interesting one.  Writes to $FF00-$FFFF always reach RAM even
 ; while the overlay is mapped for reads (see boot_rom.sv / bank0_ram.sv), so
@@ -40,6 +42,13 @@ VERA_L0_TILEB = $9F2F
 
 ; X816 system control (new; not an X16 register)
 SYSCTL        = $9F80          ; bit 0: boot ROM overlay enable (1 at reset)
+
+; Where a loaded program lives. Bank $01 is the first SDRAM bank -- bank $00
+; is BRAM and holds the direct page, the stack and this stub, so a load must
+; not land there. The RTL's HPS loader adds this base to the file offset, so
+; a program links at PROG_BASE+4 and loads from offset 0.
+PROG_BASE     = $010000
+; Magic at PROG_BASE is the four bytes "X816"; the entry point is PROG_BASE+4.
 
 .segment "BOOT"
 ; ----------------------------------------------------------------------------
@@ -69,9 +78,33 @@ reset:
         sep     #$20
 .a8
         stz     SYSCTL          ; overlay off -- bank 0 is now uniform RAM
+
+; ---- hand over to a loaded program, if there is one ------------------------
+; Programs live at PROG_BASE in SDRAM, not bank $00, so a load cannot trample
+; the direct page, the stack or this stub. The four-byte magic distinguishes
+; "a program was loaded" from "SDRAM powered up as noise" -- bank $00 is BRAM
+; and comes up zeroed, but banks $01+ do not.
+;
+; Nothing is copied down: the program runs in place from SDRAM, which is the
+; normal case for a flat machine and exercises the CPU stall path.
+        lda     PROG_BASE+0
+        cmp     #'X'
+        bne     no_prog
+        lda     PROG_BASE+1
+        cmp     #'8'
+        bne     no_prog
+        lda     PROG_BASE+2
+        cmp     #'1'
+        bne     no_prog
+        lda     PROG_BASE+3
+        cmp     #'6'
+        bne     no_prog
+        jml     PROG_BASE+4     ; long jump: sets PBR, program owns the machine
+
+; ---- nothing loaded: paint the bring-up bands ------------------------------
+no_prog:
         rep     #$20
 .a16
-
         jsr     vera_init
         jsr     paint
 

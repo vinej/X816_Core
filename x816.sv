@@ -180,8 +180,20 @@ module emu
     // linked for $01:0000 is written with 24'h010000 + offset.
     assign dl_hold = ioctl_download & ((ioctl_index[5:0] == 6'd1) |
                                        (ioctl_index      == 16'h0040));
-    wire [23:0] dl_addr = ioctl_addr[23:0];
+    // Programs load at PROG_BASE, not at raw file offset. Offset 0 would land
+    // on the zero page and trample the direct page, the stack and the boot
+    // stub's RAM copy. Bank $01 is the first SDRAM bank, so a loaded program
+    // also runs in place from SDRAM rather than out of BRAM.
+    //
+    // boot/boot.s looks for the four-byte magic "X816" here and jumps to
+    // PROG_BASE+4; without it, it falls back to the bands demo. Keep the two
+    // in step if this ever moves.
+    localparam [23:0] PROG_BASE = 24'h01_0000;
+
+    wire [23:0] dl_addr = PROG_BASE + ioctl_addr[23:0];
     wire        dl_wr   = ioctl_wr & dl_hold & (ioctl_addr[26:24] == 3'd0);
+    // Retained so the bank-0 loader path still works if PROG_BASE is ever moved
+    // there; unreachable while PROG_BASE is in SDRAM.
     wire        dl_to_bank0 = (dl_addr[23:16] == 8'h00);
 
     wire bank0_ld_busy, sdram_ld_busy;

@@ -47,3 +47,5 @@ boot/vramtest.hex
 boot/sdramtest.hex
 boot/sdramtest.o
 boot/sdramtest.rom
+boot/loadtest.o
+boot/loadtest.bin
