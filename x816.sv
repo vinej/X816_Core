@@ -1,0 +1,882 @@
+//============================================================================
+//  X816 for MiSTer  --  a flat 16 MB, native-mode-only 65C816 machine.
+//
+//  This is NOT a Commander X16 and cannot run X16 software.  It reuses the
+//  X16 core's PERIPHERALS (VERA, YM2151, 6522 VIAs, the SMC keyboard path)
+//  and the whole MiSTer framework, but replaces the machine architecture:
+//
+//    X16                                  X816
+//    ---------------------------------    ---------------------------------
+//    16-bit address bus                   FLAT 24-bit bus, 16 MB
+//    ROM bank latch at $0001              no banking at all
+//    RAM bank latch at $0000              no banking at all
+//    $A000-$BFFF HiRAM window             no windows
+//    256 KB system ROM in BRAM            256-byte boot overlay, then none
+//    65C816 running in EMULATION mode     NATIVE mode, M=0/X=0
+//
+//  MEMORY MAP
+//    $00:0000-$00:9EFF   RAM   (bank-0 BRAM, single cycle)
+//    $00:9F00-$00:9FFF   I/O   (same page layout as the X16 -- see below)
+//    $00:A000-$00:FEFF   RAM   (bank-0 BRAM, single cycle)
+//    $00:FF00-$00:FFFF   boot ROM overlay for READS while SYSCTL[0]=1,
+//                        RAM underneath for writes and after SYSCTL[0]=0
+//    $01:0000-$FF:FFFF   RAM   (SDRAM, stalls the CPU per access)
+//
+//  I/O page ($00:9Fxx) is deliberately byte-for-byte the X16's, so VERA, VIA
+//  and YM2151 register offsets -- and any driver written against them --
+//  port over unchanged.  One 256-byte hole in a 16 MB space is a cheap price
+//  for that.
+//    $9F00-$9F0F  VIA #1      $9F20-$9F3F  VERA
+//    $9F10-$9F1F  VIA #2      $9F40-$9F4F  YM2151
+//    $9F80-$9F8F  SYSCTL      (new: X816 system control, not an X16 register)
+//
+//  CLOCKS come from the X16 core's existing PLL IP, unchanged, so no IP
+//  regeneration is needed: outclk_0 25.0 MHz (VERA pixel), outclk_1 12.5 MHz
+//  (spare), outclk_2 8.0 MHz (CPU + peripherals), outclk_3 100.0 MHz (SDRAM +
+//  hps_io).
+//
+//  NOTE the emu-level PLL instance must stay named `pll` with inner instance
+//  `pll_inst`: sys/sys_top.sdc matches the path emu|pll|pll_inst|altera_pll_i
+//  to decouple the core clocks from the HDMI/audio clock groups.
+//
+//  SCOPE OF THIS BUILD (bring-up).  Deliberately not yet wired, each of which
+//  is a straight lift from the X16 core when wanted:
+//    * guest SD card (spi_sd_master100 + sd_card + hps_io virtual block dev)
+//    * RTC / NVRAM backing (rtc_x16, nvram_backer)
+//    * serial card (x16_serial_card)
+//    * SDRAM bitmap layer (bitmap_regs, bitmap_engine)
+//  See doc/PORTING.md for the order these should come back in.
+//============================================================================
+
+module emu
+(
+    `include "sys/emu_ports.vh"
+);
+
+    // ========================================================================
+    // Clock generation
+    // ========================================================================
+    wire pll_locked;
+    wire pix_clk;       // VERA pixel clock            -- 25.0 MHz
+    wire aud_mclk;      // spare                        -- 12.5 MHz
+    wire cpu_clk;       // CPU + VIA + SMC              --  8.0 MHz
+    wire sdram_clk;     // SDRAM controller + hps_io    -- 100.0 MHz
+
+    // FREE-RUN the core PLL (rst tied 0).  hps_io and the pixel clock are both
+    // driven from it, so feeding the framework RESET into .rst stops the OSD
+    // and HDMI along with the core and can deadlock the re-lock/handshake race
+    // on a slow-corner board.  Reset is handled internally instead: every
+    // domain's reset gates on (~RESET & pll_locked).
+    pll pll (
+        .refclk   (CLK_50M),
+        .rst      (1'b0),
+        .outclk_0 (pix_clk),
+        .outclk_1 (aud_mclk),
+        .outclk_2 (cpu_clk),
+        .outclk_3 (sdram_clk),
+        .locked   (pll_locked)
+    );
+
+    // ========================================================================
+    // Resets
+    // ========================================================================
+    wire dl_hold;                    // HPS image download in progress
+    wire smc_reset_req, smc_nmi_req, smc_power_off_req;
+    wire [7:0] smc_act_led;
+
+    // SMC reset request (I2C command $02; power-off $01 is treated as a reset
+    // -- there is no PSU to switch here).  smc_x16 emits a 1-cycle cpu_clk
+    // pulse; stretch it so every domain's synchronizer sees it and so the SMC
+    // itself resets and drops the request.
+    reg [7:0] smc_rst_stretch = 8'd0;
+    always @(posedge cpu_clk)
+        if (smc_reset_req | smc_power_off_req) smc_rst_stretch <= 8'd255;
+        else if (smc_rst_stretch != 8'd0)      smc_rst_stretch <= smc_rst_stretch - 8'd1;
+    wire smc_reset_hold = (smc_rst_stretch != 8'd0);
+
+    wire sys_rst_n = ~RESET & pll_locked & ~dl_hold & ~smc_reset_hold;
+
+    // Memory-side reset EXCLUDES the download hold: flat_sdram must stay alive
+    // (refresh + loader port) while an image streams in with the CPU parked.
+    wire mem_rst_n_raw = ~RESET & pll_locked;
+    reg [1:0] mem_rst_sync = 2'b00;
+    always @(posedge cpu_clk or negedge mem_rst_n_raw)
+        if (!mem_rst_n_raw) mem_rst_sync <= 2'b00;
+        else                mem_rst_sync <= {mem_rst_sync[0], 1'b1};
+    wire mem_reset_n = mem_rst_sync[1];
+
+    reg [1:0] cpu_rst_sync = 2'b00;
+    always @(posedge cpu_clk or negedge sys_rst_n)
+        if (!sys_rst_n) cpu_rst_sync <= 2'b00;
+        else            cpu_rst_sync <= {cpu_rst_sync[0], 1'b1};
+    wire cpu_reset_n = cpu_rst_sync[1];
+
+    // ========================================================================
+    // HPS_IO
+    // ========================================================================
+    localparam CONF_STR = {
+        "X816;;",
+        "-;",
+        "F1,BIN,Load Image;",       // ioctl index 1 -> flat memory, addr = file offset
+        "-;",
+        "J1,A,B,X,Y,L,R,Select,Start;",
+        "V,v0.1"
+    };
+
+    wire [127:0] status;
+    wire  [1:0]  buttons;
+    wire         forced_scandoubler;
+    wire         direct_video;
+    wire [10:0]  ps2_key;
+    wire [24:0]  ps2_mouse;
+    wire [15:0]  ps2_mouse_ext;
+    wire [31:0]  joystick_0, joystick_1;
+    wire         ioctl_download;
+    wire         ioctl_wr;
+    wire [26:0]  ioctl_addr;
+    wire  [7:0]  ioctl_dout;
+    wire [15:0]  ioctl_index;
+    wire         ioctl_wait;
+
+    // No virtual block devices in this build -- tie the sd_* inputs off.
+    wire [31:0] sd_lba[1];      assign sd_lba[0]      = 32'd0;
+    wire  [5:0] sd_blk_cnt[1];  assign sd_blk_cnt[0]  = 6'd0;
+    wire  [7:0] sd_buff_din[1]; assign sd_buff_din[0] = 8'd0;
+
+    // hps_io runs at 100 MHz.  At 8 MHz the FPGA->HPS readout direction
+    // undersamples the HPS bus strobes; every working MiSTer core runs this
+    // block in the 32-112 MHz range.  ps2_key/ps2_mouse are 2-FF synced into
+    // cpu_clk below; everything else stays inside the 100 MHz domain.
+    hps_io #(.CONF_STR(CONF_STR)) u_hps (
+        .clk_sys           (sdram_clk),
+        .HPS_BUS           (HPS_BUS),
+        .buttons           (buttons),
+        .status            (status),
+        .forced_scandoubler(forced_scandoubler),
+        .direct_video      (direct_video),
+        .ps2_key           (ps2_key),
+        .ps2_mouse         (ps2_mouse),
+        .ps2_mouse_ext     (ps2_mouse_ext),
+        .joystick_0        (joystick_0),
+        .joystick_1        (joystick_1),
+        .ioctl_download    (ioctl_download),
+        .ioctl_wr          (ioctl_wr),
+        .ioctl_addr        (ioctl_addr),
+        .ioctl_dout        (ioctl_dout),
+        .ioctl_index       (ioctl_index),
+        .ioctl_wait        (ioctl_wait),
+        .sd_lba            (sd_lba),
+        .sd_blk_cnt        (sd_blk_cnt),
+        .sd_rd             (1'b0),
+        .sd_wr             (1'b0),
+        .sd_buff_din       (sd_buff_din)
+    );
+
+    // ---- image download ----------------------------------------------------
+    // ioctl_index encoding (MiSTer Main): an OSD file pick sends
+    // {ext_index, slot[5:0]}, so "Load Image" is 6'd1 in the slot bits; the
+    // bootN.rom auto-load loop instead sends N<<6, i.e. boot1.rom = 16'h0040.
+    // Match both.  The file's byte offset IS the flat address, so an image
+    // linked for $01:0000 is written with 24'h010000 + offset.
+    assign dl_hold = ioctl_download & ((ioctl_index[5:0] == 6'd1) |
+                                       (ioctl_index      == 16'h0040));
+    wire [23:0] dl_addr = ioctl_addr[23:0];
+    wire        dl_wr   = ioctl_wr & dl_hold & (ioctl_addr[26:24] == 3'd0);
+    wire        dl_to_bank0 = (dl_addr[23:16] == 8'h00);
+
+    wire bank0_ld_busy, sdram_ld_busy;
+    assign ioctl_wait = bank0_ld_busy | sdram_ld_busy;
+
+    // ========================================================================
+    // CPU
+    // ========================================================================
+    wire [23:0] cpu_a;
+    wire [23:0] cpu_pc;
+    wire  [7:0] cpu_di;
+    wire  [7:0] cpu_do;
+    wire        cpu_rwn;
+    wire        cpu_sync;
+    wire        cpu_bus_valid;
+    wire        cpu_emu_mode;
+    wire        cpu_i_flag;
+    wire        cpu_wait_state;
+    wire        cpu_rdy;              // driven by the stall network below
+
+    wire vera_irq_n, via1_irq_n, via2_irq_n, ym_irq_n;
+
+    // VERA IRQ is generated in pix_clk -> 2-FF sync into cpu_clk.
+    reg [1:0] vera_irq_sync = 2'b11;
+    always @(posedge cpu_clk or negedge cpu_reset_n)
+        if (!cpu_reset_n) vera_irq_sync <= 2'b11;
+        else              vera_irq_sync <= {vera_irq_sync[0], vera_irq_n};
+
+    // YM2151 timer IRQ lives in pix_clk too.
+    reg [1:0] ym_irq_sync = 2'b11;
+    always @(posedge cpu_clk or negedge cpu_reset_n)
+        if (!cpu_reset_n) ym_irq_sync <= 2'b11;
+        else              ym_irq_sync <= {ym_irq_sync[0], ym_irq_n};
+
+    // via*_irq_n are already cpu_clk-synchronous.
+    wire cpu_irq_n = vera_irq_sync[1] & via1_irq_n & via2_irq_n & ym_irq_sync[1];
+
+    // SMC NMI request -> stretched low pulse on the edge-sensitive NMI input.
+    reg [3:0] smc_nmi_stretch = 4'd0;
+    always @(posedge cpu_clk or negedge cpu_reset_n)
+        if (!cpu_reset_n)                 smc_nmi_stretch <= 4'd0;
+        else if (smc_nmi_req)             smc_nmi_stretch <= 4'd15;
+        else if (smc_nmi_stretch != 4'd0) smc_nmi_stretch <= smc_nmi_stretch - 4'd1;
+    wire cpu_nmi_n = (smc_nmi_stretch == 4'd0);
+
+    p65c816_flat_wrap u_cpu (
+        .clk        (cpu_clk),
+        .enable     (cpu_rdy),
+        .res_n      (cpu_reset_n),
+        .irq_n      (cpu_irq_n),
+        .nmi_n      (cpu_nmi_n),
+        .abort_n    (1'b1),               // no ABORT source in this machine
+        .r_w_n      (cpu_rwn),
+        .sync       (cpu_sync),
+        .addr       (cpu_a),
+        .din        (cpu_di),
+        .dout       (cpu_do),
+        .pc         (cpu_pc),
+        .emu_mode   (cpu_emu_mode),
+        .i_flag     (cpu_i_flag),
+        .wait_state (cpu_wait_state),
+        .mlb        (),
+        .bus_valid  (cpu_bus_valid)
+    );
+
+    // ========================================================================
+    // Address decode  --  flat 24-bit
+    // ========================================================================
+    // Every chip select is qualified with dec_valid.  On the '816's internal
+    // cycles A_OUT carries in-flight address math -- GHOST addresses that must
+    // not reach I/O with read side effects (VERA's data-port auto-increment,
+    // the VIA's flag clears) nor start an SDRAM access.
+    //
+    // WRITE cycles are exempt (the `| ~cpu_rwn` term): WE is asserted only on
+    // true write cycles, and dropping a write whose VA flag mis-synthesises is
+    // catastrophic -- on the X16 that exact bug made '816 STA abs,X writes
+    // vanish on silicon while being perfect in RTL sim.  Ghost READS stay
+    // fully gated.
+    wire dec_valid = cpu_bus_valid | ~cpu_rwn;
+
+    wire bank0     = (cpu_a[23:16] == 8'h00);
+    wire io_page   = bank0 & (cpu_a[15:8] == 8'h9F);
+
+    wire via1_cs   = dec_valid & io_page & (cpu_a[7:4] == 4'h0);   // $9F00-$9F0F
+    wire via2_cs   = dec_valid & io_page & (cpu_a[7:4] == 4'h1);   // $9F10-$9F1F
+    wire vera_cs   = dec_valid & io_page & (cpu_a[7:5] == 3'b001); // $9F20-$9F3F
+    wire ym_cs     = dec_valid & io_page & (cpu_a[7:4] == 4'h4);   // $9F40-$9F4F
+    wire sysctl_cs = dec_valid & io_page & (cpu_a[7:4] == 4'h8);   // $9F80-$9F8F
+
+    // Boot ROM overlay: READ-ONLY shadow of $00:FF00-$00:FFFF.  Writes fall
+    // through to the RAM underneath so the stub can copy itself down before
+    // clearing SYSCTL[0] -- see boot/boot.s.
+    wire rom_overlay_en;
+    wire boot_page  = bank0 & (cpu_a[15:8] == 8'hFF);
+    wire boot_sel   = dec_valid & boot_page & rom_overlay_en & cpu_rwn;
+
+    wire bank0_cs   = dec_valid & bank0 & ~io_page;   // includes $FF00 for writes
+    wire flat_cs    = dec_valid & ~bank0;             // banks $01-$FF -> SDRAM
+
+    // ========================================================================
+    // SYSCTL ($00:9F80)
+    //   bit 0  boot ROM overlay enable.  Set at reset; software clears it once
+    //          it has populated $FF00-$FFFF in RAM, after which bank 0 is 64 KB
+    //          of uniform RAM and the vectors are patchable.
+    // Read-back also exposes the CPU's live E flag (bit 1) so software can
+    // assert that it really is in native mode.  cpu_wait_state is deliberately
+    // NOT exposed here: it is high whenever the CPU is not advancing for any
+    // reason, so a read of it can only ever return 0 -- the read itself commits
+    // only on an advancing cycle.  It goes to LED_USER instead.
+    // ========================================================================
+    reg sysctl_overlay = 1'b1;
+    always @(posedge cpu_clk or negedge cpu_reset_n) begin
+        if (!cpu_reset_n)                                sysctl_overlay <= 1'b1;
+        else if (sysctl_cs && ~cpu_rwn && cpu_a[3:0] == 4'h0)
+                                                         sysctl_overlay <= cpu_do[0];
+    end
+    assign rom_overlay_en = sysctl_overlay;
+
+    wire [7:0] sysctl_data = (cpu_a[3:0] == 4'h0)
+                           ? {6'b0, cpu_emu_mode, sysctl_overlay}
+                           : 8'h00;
+
+    // ========================================================================
+    // Memory
+    // ========================================================================
+    wire [7:0] bank0_data, boot_data, sdram_data;
+    wire       sdram_ready;
+
+    bank0_ram u_bank0 (
+        .clk     (cpu_clk),
+        .addr    (cpu_a[15:0]),
+        .cs      (bank0_cs),
+        .we      (~cpu_rwn),
+        .wr_data (cpu_do),
+        .rd_data (bank0_data),
+        .ld_clk  (sdram_clk),
+        .ld_wr   (dl_wr &  dl_to_bank0),
+        .ld_addr (dl_addr[15:0]),
+        .ld_data (ioctl_dout),
+        .ld_busy (bank0_ld_busy)
+    );
+
+    boot_rom u_boot (
+        .clk     (cpu_clk),
+        .addr    (cpu_a[7:0]),
+        .rd_data (boot_data)
+    );
+
+    flat_sdram u_flat (
+        .clk        (cpu_clk),
+        .reset_n    (mem_reset_n),        // stays alive through a download
+        .cs         (flat_cs),
+        .we         (~cpu_rwn),
+        .byte_addr  (cpu_a),
+        .wr_data    (cpu_do),
+        .rd_data    (sdram_data),
+        .ready      (sdram_ready),
+
+        .sdram_clk  (sdram_clk),
+        .ld_wr      (dl_wr & ~dl_to_bank0),
+        .ld_addr    (dl_addr),
+        .ld_data    (ioctl_dout),
+        .ld_busy    (sdram_ld_busy),
+
+        .SDRAM_A    (SDRAM_A),
+        .SDRAM_DQ   (SDRAM_DQ),
+        .SDRAM_BA   (SDRAM_BA),
+        .SDRAM_nCS  (SDRAM_nCS),
+        .SDRAM_nWE  (SDRAM_nWE),
+        .SDRAM_nRAS (SDRAM_nRAS),
+        .SDRAM_nCAS (SDRAM_nCAS),
+        .SDRAM_CKE  (SDRAM_CKE),
+        .SDRAM_CLK  (SDRAM_CLK),
+        .SDRAM_DQML (SDRAM_DQML),
+        .SDRAM_DQMH (SDRAM_DQMH)
+    );
+
+    // ========================================================================
+    // VERA  --  CPU bus pipeline
+    //
+    // Carried over verbatim from the X16 core: a 4-cycle write / 2-cycle
+    // read-stall pipeline that absorbs the cpu_clk vs pix_clk skew so VERA
+    // sees stable address/data/strobe for the whole transaction.
+    //
+    // Two things here are NOT simplifiable.  vera_access must not be gated by
+    // cpu_rdy (gating kills it during the read stall), and the write/read
+    // strobes must use the LATCHED q-flags rather than live cpu_rwn.
+    // ========================================================================
+    wire vera_access = vera_cs;
+    wire vera_write  = vera_access & ~cpu_rwn;
+    wire vera_read   = vera_access &  cpu_rwn;
+
+    reg        vera_access_q1, vera_access_q2;
+    reg        vera_write_q1,  vera_write_q2,  vera_write_q3;
+    reg        vera_read_q1,   vera_read_q2;
+    reg  [7:0] cpu_do_q1,      cpu_do_q2,      cpu_do_q3;
+    reg  [4:0] cpu_a5_q1;
+
+    always @(posedge cpu_clk or negedge cpu_reset_n) begin
+        if (!cpu_reset_n) begin
+            vera_access_q1 <= 1'b0;  vera_access_q2 <= 1'b0;
+            vera_write_q1  <= 1'b0;  vera_write_q2  <= 1'b0;  vera_write_q3 <= 1'b0;
+            vera_read_q1   <= 1'b0;  vera_read_q2   <= 1'b0;
+            cpu_do_q1      <= 8'h00; cpu_do_q2      <= 8'h00; cpu_do_q3     <= 8'h00;
+            cpu_a5_q1      <= 5'h00;
+        end else begin
+            vera_access_q1 <= vera_access;
+            vera_access_q2 <= vera_access_q1;
+            vera_write_q1  <= vera_write;
+            vera_write_q2  <= vera_write_q1;
+            vera_write_q3  <= vera_write_q2;
+            vera_read_q1   <= vera_read;
+            vera_read_q2   <= vera_read_q1;
+            if (vera_access) cpu_a5_q1 <= cpu_a[4:0];
+            if (vera_write)  cpu_do_q1 <= cpu_do;
+            cpu_do_q2      <= cpu_do_q1;
+            cpu_do_q3      <= cpu_do_q2;
+        end
+    end
+
+    wire vera_access_bw = vera_access_q1 | vera_access_q2;
+    wire vera_write_bw  = vera_write_q1  | vera_write_q2;
+    wire vera_read_bw   = vera_read_q1   | vera_read_q2;
+
+    reg [1:0] vera_read_stall = 2'h0;
+    always @(posedge cpu_clk or negedge cpu_reset_n) begin
+        if (!cpu_reset_n)     vera_read_stall <= 2'h0;
+        else if (vera_read) begin
+            if (vera_read_stall != 2'd3) vera_read_stall <= vera_read_stall + 2'd1;
+        end else              vera_read_stall <= 2'h0;
+    end
+
+    // Global stall.  flat_sdram.ready idles high when unselected, so a plain
+    // AND combines the VERA read stall with the SDRAM access stall.
+    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd2)) & sdram_ready;
+
+    wire [4:0] vera_a_out = vera_access ? cpu_a[4:0] : cpu_a5_q1;
+    wire [7:0] vera_d_out = vera_write    ? cpu_do    :
+                            vera_write_q1 ? cpu_do_q1 :
+                            vera_write_q2 ? cpu_do_q2 :
+                                            cpu_do_q3;
+
+    wire [7:0] vera_extbus_d;
+    wire       vera_d_drive = vera_write | vera_write_q1 | vera_write_q2 | vera_write_q3;
+    assign vera_extbus_d = vera_d_drive ? vera_d_out : 8'hZZ;
+
+    wire [3:0] vera_r, vera_g, vera_b;
+    wire       vera_hs, vera_vs, vera_de, vera_opaque;
+    wire       vera_audio_lrck, vera_audio_bck, vera_audio_data;
+
+    top u_vera (
+        .clk25           (pix_clk),
+
+        .extbus_cs_n     (~vera_access_bw),
+        .extbus_rd_n     (~vera_read_bw),
+        .extbus_wr_n     (~vera_write_bw),
+        .extbus_a        (vera_a_out),
+        .extbus_d        (vera_extbus_d),
+        .extbus_irq_n    (vera_irq_n),
+
+        .vga_r           (vera_r),
+        .vga_g           (vera_g),
+        .vga_b           (vera_b),
+        .vga_hsync       (vera_hs),
+        .vga_vsync       (vera_vs),
+        .vga_de          (vera_de),
+        .vga_opaque      (vera_opaque),
+
+        // VERA's own SPI master is unused; the guest SD is a later step.
+        .spi_sck         (),
+        .spi_mosi        (),
+        .spi_miso        (1'b1),
+        .spi_ssel_n_sd   (),
+
+        .audio_lrck      (vera_audio_lrck),
+        .audio_bck       (vera_audio_bck),
+        .audio_data      (vera_audio_data),
+
+        .dbg_wrdata_r    (),
+        .dbg_wraddr_r    (),
+        .dbg_do_write    (),
+        .dbg_video_mode  (),
+        .dbg_dcsel       (),
+        .spi_busy_out    (),
+        .spi_autotx_out  (),
+
+        .composite_luma  (),
+        .composite_chroma()
+    );
+
+    // ========================================================================
+    // IKAOPM (YM2151)
+    //
+    // Clocking and handshake carried over from the X16 core.  EMUCLK = pix_clk
+    // with a /7 clock enable = 3.5714 MHz phiM (-0.23%, ~4 cents flat); the
+    // CPU bus is crossed by a toggle handshake rather than sampled raw, and
+    // reads return a synced status with the write-pending flag OR'd into BUSY
+    // so a busy-poll issued right after a write cannot outrun the handshake.
+    // ========================================================================
+    wire        ym_wr = ym_cs & ~cpu_rwn;
+    wire [15:0] ym_emu_r, ym_emu_l;
+    wire  [7:0] ym_od;
+
+    reg [1:0] ymrst_sync = 2'b00;
+    always @(posedge pix_clk or negedge sys_rst_n)
+        if (!sys_rst_n) ymrst_sync <= 2'b00;
+        else            ymrst_sync <= {ymrst_sync[0], 1'b1};
+    wire ym_reset_n = ymrst_sync[1];
+
+    reg [2:0] ym_div = 3'd0;
+    always @(posedge pix_clk) ym_div <= (ym_div == 3'd6) ? 3'd0 : ym_div + 3'd1;
+    wire ym_pcen_n = (ym_div != 3'd0);
+
+    // cpu-domain write capture: one capture per bus-write edge
+    reg       ym_req_t = 1'b0;
+    reg       ym_wr_d  = 1'b0;
+    reg       ym_wa0   = 1'b0;
+    reg [7:0] ym_wdat  = 8'h00;
+    always @(posedge cpu_clk) begin
+        ym_wr_d <= ym_wr;
+        if (ym_wr & ~ym_wr_d) begin
+            ym_wa0   <= cpu_a[0];
+            ym_wdat  <= cpu_do;
+            ym_req_t <= ~ym_req_t;
+        end
+    end
+
+    reg [2:0] ym_req_s = 3'b000;
+    always @(posedge pix_clk) ym_req_s <= {ym_req_s[1:0], ym_req_t};
+    wire ym_req_edge = ym_req_s[2] ^ ym_req_s[1];
+
+    reg       ym_ack_t  = 1'b0;
+    reg       ym_bus_wr = 1'b0;
+    reg [4:0] ym_hold   = 5'd0;
+    reg       ym_a0_r   = 1'b0;
+    reg [7:0] ym_d_r    = 8'h00;
+    reg [7:0] ym_status = 8'h00;
+    // After a DATA write (A0=1), hold the busy shadow until the OPM's own BUSY
+    // flag is seen rising then falling: IKAOPM silently drops a data write
+    // issued while the previous one is unconsumed, exactly like the real chip.
+    reg [1:0] ym_post = 2'd0;
+    reg [8:0] ym_tmo  = 9'd0;
+    always @(posedge pix_clk) begin
+        case (ym_post)
+        2'd0: begin
+            ym_status <= ym_od;              // idle = continuous status capture
+            if (ym_req_edge) begin
+                ym_a0_r   <= ym_wa0;
+                ym_d_r    <= ym_wdat;
+                ym_bus_wr <= 1'b1;
+                ym_hold   <= 5'd15;          // 16 pix cycles = 640 ns > 2 phiM
+                ym_post   <= 2'd1;
+            end
+        end
+        2'd1: begin
+            if (ym_hold != 5'd0) ym_hold <= ym_hold - 5'd1;
+            else begin
+                ym_bus_wr <= 1'b0;
+                if (ym_a0_r) begin
+                    ym_post <= 2'd2;
+                    ym_tmo  <= 9'd200;       // ~8 us guard for the busy rise
+                end else begin
+                    ym_ack_t <= ~ym_ack_t;
+                    ym_post  <= 2'd0;
+                end
+            end
+        end
+        2'd2: begin
+            ym_tmo <= ym_tmo - 9'd1;
+            if (ym_od[7]) begin
+                ym_post <= 2'd3;
+                ym_tmo  <= 9'd500;           // ~20 us >= real busy duration
+            end else if (ym_tmo == 9'd0) begin
+                ym_ack_t <= ~ym_ack_t;
+                ym_post  <= 2'd0;
+            end
+        end
+        2'd3: begin
+            ym_tmo <= ym_tmo - 9'd1;
+            if (!ym_od[7] || ym_tmo == 9'd0) begin
+                ym_ack_t <= ~ym_ack_t;
+                ym_post  <= 2'd0;
+            end
+        end
+        endcase
+    end
+
+    reg [1:0] ym_ack_s    = 2'b00;
+    reg [7:0] ym_status_s = 8'h00, ym_status_c = 8'h00;
+    always @(posedge cpu_clk) begin
+        ym_ack_s    <= {ym_ack_s[0], ym_ack_t};
+        ym_status_s <= ym_status;
+        ym_status_c <= ym_status_s;
+    end
+    wire       ym_pending = ym_req_t ^ ym_ack_s[1];
+    wire [7:0] ym_rd_data = {ym_status_c[7] | ym_pending, ym_status_c[6:0]};
+
+    IKAOPM #(
+        .FULLY_SYNCHRONOUS (1),
+        .FAST_RESET        (1),
+        .USE_BRAM          (0)
+    ) u_ym2151 (
+        .i_EMUCLK      (pix_clk),
+        .i_phiM_PCEN_n (ym_pcen_n),
+        .i_IC_n        (ym_reset_n),
+        .i_CS_n        (1'b0),                    // always selected (see FSM)
+        .i_RD_n        (ym_bus_wr),               // idle: continuous status read
+        .i_WR_n        (~ym_bus_wr),
+        .i_A0          (ym_bus_wr ? ym_a0_r : 1'b0),
+        .i_D           (ym_d_r),
+        .o_D           (ym_od),
+        .o_D_OE        (),
+        .o_CT1         (),
+        .o_CT2         (),
+        .o_IRQ_n       (ym_irq_n),
+        .o_SH1         (),
+        .o_SH2         (),
+        .o_SO          (),
+        .o_EMU_R       (ym_emu_r),
+        .o_EMU_L       (ym_emu_l),
+        .o_EMU_R_SAMPLE(),
+        .o_EMU_L_SAMPLE()
+    );
+
+    // ========================================================================
+    // VIA #1  --  SNES gamepads + the internal I2C bus to the SMC
+    // ========================================================================
+    wire [7:0] via1_data;
+    wire [7:0] via1_pa_in, via1_pa_out, via1_pa_oe;
+    wire [7:0] via1_pb_in, via1_pb_out, via1_pb_oe;
+
+    // I2C: VIA1 PA[1] = SCL, PA[0] = SDA, open-drain, combined with the SMC.
+    wire smc_sda_drv_low;
+    wire via_sda_drv_low = via1_pa_oe[0] & ~via1_pa_out[0];
+    wire via_scl_drv_low = via1_pa_oe[1] & ~via1_pa_out[1];
+    wire bus_sda = ~(via_sda_drv_low | smc_sda_drv_low);
+    wire bus_scl = ~via_scl_drv_low;
+
+    // MiSTer pads arrive in the 100 MHz hps_io domain as quasi-static button
+    // levels -> 2-FF sync into cpu_clk.
+    reg [11:0] joy0_s1, joy0_s2, joy1_s1, joy1_s2;
+    always @(posedge cpu_clk) begin
+        joy0_s1 <= joystick_0[11:0];  joy0_s2 <= joy0_s1;
+        joy1_s1 <= joystick_1[11:0];  joy1_s2 <= joy1_s1;
+    end
+
+    wire snes_latch = via1_pa_out[2] | ~via1_pa_oe[2];   // pulled up when undriven
+    wire snes_clk   = via1_pa_out[3] | ~via1_pa_oe[3];
+    wire snes_data1, snes_data2;
+
+    snes_pad u_pad1 (
+        .clk(cpu_clk), .reset_n(cpu_reset_n),
+        .joy(joy0_s2), .latch(snes_latch), .jclk(snes_clk), .data(snes_data1)
+    );
+    snes_pad u_pad2 (
+        .clk(cpu_clk), .reset_n(cpu_reset_n),
+        .joy(joy1_s2), .latch(snes_latch), .jclk(snes_clk), .data(snes_data2)
+    );
+
+    assign via1_pa_in[0]   = bus_sda;
+    assign via1_pa_in[1]   = bus_scl;
+    assign via1_pa_in[3:2] = via1_pa_out[3:2] | ~via1_pa_oe[3:2];
+    assign via1_pa_in[4]   = 1'b1;          // pad #4 absent
+    assign via1_pa_in[5]   = 1'b1;          // pad #3 absent
+    assign via1_pa_in[6]   = snes_data2;
+    assign via1_pa_in[7]   = snes_data1;
+    assign via1_pb_in[7:6] = 2'b11;
+    assign via1_pb_in[5:0] = via1_pb_out[5:0] | ~via1_pb_oe[5:0];
+
+    via65c22 u_via1 (
+        .clk     (cpu_clk),
+        .reset_n (cpu_reset_n),
+        .cs      (via1_cs),
+        .rwn     (cpu_rwn),
+        .enable  (cpu_rdy),
+        .addr    (cpu_a[3:0]),
+        .di      (cpu_do),
+        .do_o    (via1_data),
+        .pa_in   (via1_pa_in),
+        .pa_out  (via1_pa_out),
+        .pa_oe   (via1_pa_oe),
+        .pb_in   (via1_pb_in),
+        .pb_out  (via1_pb_out),
+        .pb_oe   (via1_pb_oe),
+        .ca1_in  (1'b0),
+        .ca2_in  (1'b0),
+        .cb1_in  (1'b0),
+        .cb2_in  (1'b0),
+        .ca2_out (), .ca2_oe (),
+        .cb1_out (), .cb1_oe (),
+        .cb2_out (), .cb2_oe (),
+        .irq_n   (via1_irq_n)
+    );
+
+    // ========================================================================
+    // VIA #2  --  user port, left floating/pulled-up like the stock machine
+    // ========================================================================
+    wire [7:0] via2_data;
+    wire [7:0] via2_pa_in, via2_pa_out, via2_pa_oe;
+    wire [7:0] via2_pb_in, via2_pb_out, via2_pb_oe;
+
+    assign via2_pa_in = via2_pa_out | ~via2_pa_oe;
+    assign via2_pb_in = via2_pb_out | ~via2_pb_oe;
+
+    via65c22 u_via2 (
+        .clk     (cpu_clk),
+        .reset_n (cpu_reset_n),
+        .cs      (via2_cs),
+        .rwn     (cpu_rwn),
+        .enable  (cpu_rdy),
+        .addr    (cpu_a[3:0]),
+        .di      (cpu_do),
+        .do_o    (via2_data),
+        .pa_in   (via2_pa_in),
+        .pa_out  (via2_pa_out),
+        .pa_oe   (via2_pa_oe),
+        .pb_in   (via2_pb_in),
+        .pb_out  (via2_pb_out),
+        .pb_oe   (via2_pb_oe),
+        .ca1_in  (1'b0),
+        .ca2_in  (1'b0),
+        .cb1_in  (1'b0),
+        .cb2_in  (1'b0),
+        .ca2_out (), .ca2_oe (),
+        .cb1_out (), .cb1_oe (),
+        .cb2_out (), .cb2_oe (),
+        .irq_n   (via2_irq_n)
+    );
+
+    // ========================================================================
+    // Keyboard / mouse: hps_io ps2_key -> ps2_to_smc_bridge -> smc_x16 (I2C $42)
+    // ========================================================================
+    wire [7:0] smc_uart_byte;
+    wire       smc_uart_byte_valid;
+
+    // ps2_key/ps2_mouse originate in the 100 MHz domain.  Bit [10] / bit [24]
+    // is a toggle marking each new event and the payload is held stable between
+    // events (milliseconds apart), so a plain vector 2-FF sync is safe.
+    reg [10:0] ps2_key_s1, ps2_key_s2;
+    reg [24:0] ps2_mouse_s1, ps2_mouse_s2;
+    reg  [7:0] ps2_mwheel_s1, ps2_mwheel_s2;
+    always @(posedge cpu_clk) begin
+        ps2_key_s1    <= ps2_key;        ps2_key_s2    <= ps2_key_s1;
+        ps2_mouse_s1  <= ps2_mouse;      ps2_mouse_s2  <= ps2_mouse_s1;
+        ps2_mwheel_s1 <= ps2_mouse_ext[7:0];
+        ps2_mwheel_s2 <= ps2_mwheel_s1;
+    end
+
+    ps2_to_smc_bridge u_ps2_bridge (
+        .clk             (cpu_clk),
+        .reset_n         (cpu_reset_n),
+        .ps2_key         (ps2_key_s2),
+        .ps2_mouse       (ps2_mouse_s2),
+        .ps2_mouse_wheel (ps2_mwheel_s2),
+        .uart_byte       (smc_uart_byte),
+        .uart_byte_valid (smc_uart_byte_valid)
+    );
+
+    smc_x16 u_smc (
+        .clk             (cpu_clk),
+        .reset_n         (cpu_reset_n),
+        .sda_bus         (bus_sda),
+        .scl_bus         (bus_scl),
+        .sda_drive_low   (smc_sda_drv_low),
+        .uart_byte       (smc_uart_byte),
+        .uart_byte_valid (smc_uart_byte_valid),
+        .power_off_req   (smc_power_off_req),   // treated as a reset here
+        .reset_req       (smc_reset_req),
+        .nmi_req         (smc_nmi_req),
+        .act_led_r       (smc_act_led),
+        .dbg_kbd_count   (),
+        .dbg_saw_start   (),
+        .dbg_saw_addr_match(),
+        .dbg_saw_byte    (),
+        .dbg_saw_repeat  (),
+        .dbg_saw_stop    (),
+        .dbg_saw_tx      (),
+        .dbg_last_cmd    (),
+        .dbg_last_addr_byte(),
+        .dbg_kbd_pop     (),
+        .dbg_tx_byte     ()
+    );
+
+    // ========================================================================
+    // CPU data-in mux
+    //
+    // Open-bus emulation: unmapped reads return the last byte seen on the data
+    // bus, like a real floating bus.  Returning $00 makes device-detection code
+    // false-positive on "something present answering 0".
+    // ========================================================================
+    reg [7:0] open_bus_r = 8'h00;
+    always @(posedge cpu_clk)
+        if (cpu_rdy) open_bus_r <= cpu_rwn ? cpu_di : cpu_do;
+
+    // boot_sel FIRST: the overlay shadows the top page of bank-0 RAM on reads.
+    assign cpu_di = boot_sel   ? boot_data     :
+                    vera_cs    ? vera_extbus_d :
+                    ym_cs      ? ym_rd_data    :
+                    via1_cs    ? via1_data     :
+                    via2_cs    ? via2_data     :
+                    sysctl_cs  ? sysctl_data   :
+                    bank0_cs   ? bank0_data    :
+                    flat_cs    ? sdram_data    :
+                                 open_bus_r;
+
+    // ========================================================================
+    // Video out
+    // ========================================================================
+    assign CLK_VIDEO = pix_clk;
+    assign CE_PIXEL  = 1'b1;
+
+    assign VGA_R       = {vera_r, vera_r};
+    assign VGA_G       = {vera_g, vera_g};
+    assign VGA_B       = {vera_b, vera_b};
+    assign VGA_HS      = vera_hs;
+    assign VGA_VS      = vera_vs;
+    assign VGA_DE      = vera_de;
+    assign VGA_F1      = 1'b0;
+    assign VGA_SL      = 2'b00;
+    assign VGA_SCALER  = 1'b0;
+    assign VGA_DISABLE = 1'b0;
+    assign VIDEO_ARX   = 13'd4;
+    assign VIDEO_ARY   = 13'd3;
+
+    assign HDMI_FREEZE    = 1'b0;
+    assign HDMI_BLACKOUT  = 1'b0;
+    assign HDMI_BOB_DEINT = 1'b0;
+
+    // ========================================================================
+    // Audio out  --  VERA (PSG + PCM, I2S serial) mixed with the YM2151
+    // ========================================================================
+    wire signed [15:0] vera_al, vera_ar;
+    i2s_rx u_i2s_rx (
+        .clk   (pix_clk),
+        .lrck  (vera_audio_lrck),
+        .bck   (vera_audio_bck),
+        .data  (vera_audio_data),
+        .left  (vera_al),
+        .right (vera_ar)
+    );
+
+    function automatic [15:0] sat16(input signed [17:0] s);
+        sat16 = (s >  18'sd32767) ? 16'h7FFF :
+                (s < -18'sd32768) ? 16'h8000 : s[15:0];
+    endfunction
+
+    // VERA's full scale through the top-16 I2S tap is +/-16K (the 17-bit
+    // PSG+PCM mix sits in bits [23:7], so the tap sees mix>>1) while the YM
+    // runs a full +/-32K.  Scale VERA x2 so full-scale matches, like the real
+    // board's analog mixer.
+    reg [15:0] audio_l_r, audio_r_r;
+    always @(posedge pix_clk) begin
+        audio_l_r <= sat16($signed({{2{ym_emu_l[15]}}, ym_emu_l})
+                         + ($signed({{2{vera_al[15]}}, vera_al}) <<< 1));
+        audio_r_r <= sat16($signed({{2{ym_emu_r[15]}}, ym_emu_r})
+                         + ($signed({{2{vera_ar[15]}}, vera_ar}) <<< 1));
+    end
+
+    assign AUDIO_L   = audio_l_r;
+    assign AUDIO_R   = audio_r_r;
+    assign AUDIO_S   = 1'b1;        // signed
+    assign AUDIO_MIX = 2'b00;
+
+    // ========================================================================
+    // Tie-offs for unused framework signals
+    // ========================================================================
+    // LED_USER: activity.  cpu_wait_state here is a genuine bus-idle indicator
+    // -- it lights whenever the CPU is parked, whether in WAI/STP or stalled on
+    // an SDRAM access, which makes a wedged core visually obvious.
+    assign LED_USER  = ioctl_download | (smc_act_led != 8'h00) | cpu_wait_state;
+    assign LED_POWER = 2'b00;
+    assign LED_DISK  = 2'b00;
+    assign BUTTONS   = 2'b00;
+
+    assign SD_SCK    = 1'b0;
+    assign SD_MOSI   = 1'b0;
+    assign SD_CS     = 1'b1;
+
+    assign UART_TXD  = 1'b1;
+    assign UART_RTS  = 1'b0;
+    assign UART_DTR  = 1'b0;
+
+    assign DDRAM_CLK      = cpu_clk;
+    assign DDRAM_BURSTCNT = 8'h00;
+    assign DDRAM_ADDR     = 29'h0;
+    assign DDRAM_RD       = 1'b0;
+    assign DDRAM_DIN      = 64'h0;
+    assign DDRAM_BE       = 8'h00;
+    assign DDRAM_WE       = 1'b0;
+
+    assign USER_OUT = 7'h7F;
+    assign ADC_BUS  = 4'hZ;
+
+    // Observability only; keeps the fitter from trimming the CPU's status cone.
+    wire _unused_cpu = cpu_sync | cpu_i_flag | (|cpu_pc) | buttons[0]
+                     | forced_scandoubler | direct_video | (|status) | vera_opaque;
+
+endmodule

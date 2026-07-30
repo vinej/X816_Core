@@ -1,0 +1,92 @@
+# X816 source list.
+#
+# Provenance: everything under vera/, IKAOPM-main/ and the peripheral block
+# below is carried over unchanged from the Commander X16 MiSTer core -- those
+# devices are 8-bit bus slaves that know nothing about the CPU's address width,
+# so the flat 24-bit rebuild does not touch them.  What is NEW here is the CPU
+# wrapper, the memory system and the top level.
+
+# ---- Search paths --------------------------------------------------------
+set_global_assignment -name SEARCH_PATH rtl
+set_global_assignment -name SEARCH_PATH rtl/cpu/65C816
+set_global_assignment -name SEARCH_PATH vera/fpga/source
+
+# ---- Top level + timing --------------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE x816.sv
+set_global_assignment -name SDC_FILE x816.sdc
+
+# ---- X816 memory system (NEW) --------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bank0_ram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/boot_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/flat_sdram.sv
+set_global_assignment -name VERILOG_FILE rtl/sdram.v
+
+# ---- Peripherals (carried over from the X16 core, unchanged) -------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/via65c22.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/smc_x16.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/smc_i2c_slave.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/i2c_bb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/i2c_open_drain.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ps2_to_smc_bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/x16_periph.sv
+
+# ---- P65C816 CPU (VHDL) --------------------------------------------------
+# The X16-fixed fork of the srg320 core (B-flag, emulation-mode SP, native
+# DL != 0, IRQ sync).  Those fixes are all in the NATIVE-mode paths, so they
+# matter more here than they did in the X16.  All in the work library.
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/P65816_pkg.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/BCDAdder.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/AddSubBCD.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/ALU.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/AddrGen.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/MCode.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/P65C816.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/65C816/p65c816_flat_wrap.vhd
+
+# ---- IKAOPM YM2151 (Sehyeon Kim / Raki, BSD2) ---------------------------
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_acc.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_eg.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_lfo.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_noise.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_op.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_pg.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_primitives.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_reg.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_timer.v"
+set_global_assignment -name VERILOG_FILE "IKAOPM-main/src/IKAOPM_modules/IKAOPM_timinggen.v"
+
+# ---- VERA (Frank van den Hoef, MIT) - portable Verilog ------------------
+# Skip generated/* (Lattice EBR-instantiating IP): the inferred sim/ versions
+# of palette_ram and sprite_ram are used instead so Quartus packs them into
+# M10K.  SP256K + WARMBOOT are patched out of main_ram.v + top.v.
+set_global_assignment -name VERILOG_FILE vera/fpga/source/top.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/main_ram.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/dpram.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/reset_sync.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/vram_if.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/sim/palette_ram.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/sim/sprite_ram.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/graphics/composer.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/graphics/layer_line_buffer.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/graphics/layer_renderer.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/graphics/sprite_line_buffer.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/graphics/sprite_renderer.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/video/video_vga.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/audio/audio.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/audio/audio_fifo.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/audio/dacif.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/audio/pcm.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/audio/psg.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/spi/spictrl.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/video/video_composite.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/video/video_modulator.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/video/video_modulator_coslut.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/video/video_modulator_sinlut.v
+
+# ---- IKAOPM_pg quirk ----------------------------------------------------
+# Quartus's altshift_taps inference on IKAOPM_pg's cyc9r..cyc16r_previous_phase
+# pipeline produces a broken megafunction (Error 12009 / undriven add_sub2
+# dataa bits) -- a known A&S bug for mid-chain-tapped shift pipelines.
+# Keep the chain as discrete registers.
+set_global_assignment -name AUTO_SHIFT_REGISTER_RECOGNITION OFF -entity IKAOPM_pg

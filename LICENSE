@@ -1,0 +1,54 @@
+MIT License
+
+Copyright (c) 2026 Jean-Yves Vinet
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------------
+
+This license covers the ORIGINAL code of this project:
+
+  * x816.sv                              (top level)
+  * rtl/bank0_ram.sv, rtl/boot_rom.sv, rtl/flat_sdram.sv
+  * rtl/cpu/65C816/p65c816_flat_wrap.vhd (the 24-bit CPU wrapper)
+  * boot/                                (boot ROM stub and its build script)
+  * files.qip, X816.qsf, X816.qpf, x816.sdc, doc/
+
+The repository also contains third-party components, which remain under their
+own licenses:
+
+  * MiSTer framework (sys/)          - GPL-3.0, (c) Sorgelig / MiSTer-devel
+  * VERA (vera/, vera_source_original/)
+                                     - MIT, (c) Frank van den Hoef
+  * IKAOPM YM2151 (IKAOPM-main/)     - BSD-2-Clause, (c) Sehyeon Kim (Raki)
+  * P65C816 CPU core (rtl/cpu/65C816/, all files except
+    p65c816_flat_wrap.vhd)           - from the P65816 project by srg320,
+                                       per its original author's terms
+  * Altera/Intel PLL IP (pll*, pll/) - Intel FPGA IP license
+  * Peripherals carried over from the Commander X16 MiSTer core
+    (rtl/via65c22.sv, rtl/smc_x16.sv, rtl/smc_i2c_slave.sv, rtl/i2c_bb.sv,
+     rtl/i2c_open_drain.sv, rtl/ps2_to_smc_bridge.sv, rtl/x16_periph.sv,
+     rtl/sdram.v)                    - MIT, (c) 2026 Jean-Yves Vinet
+                                       (rtl/sdram.v originates from the MiST
+                                       project and carries its own terms)
+
+NOTE ON DISTRIBUTION: because the MiSTer framework in sys/ is GPL-3.0, a
+compiled bitstream or a distributed copy of this repository as a whole is
+subject to the GPL-3.0's terms. The MIT grant above applies to the original
+files listed at the top, taken on their own.
