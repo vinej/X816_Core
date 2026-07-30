@@ -38,12 +38,41 @@ I/O page:
 ## Build
 
 ```sh
+rm -rf db incremental_db               # see the warning below -- do not skip
 quartus_sh --flow compile X816.qpf     # bitstream -> output_files/X816.rbf
-sh boot/build.sh                       # rebuild boot/boot.hex (needs cc65)
+
+sh boot/build.sh                       # boot.hex <- the bands demo (needs cc65)
+sh boot/build.sh vramtest              # boot.hex <- the VERA816 conformance test
 ```
 
 `boot/boot.hex` is committed, so the bitstream builds with no toolchain
 installed.
+
+### Always clean before compiling
+
+**Quartus's incremental flow is not trustworthy in this project.** It has
+produced a wrong bitstream twice, in two different ways, and neither reported
+an error:
+
+* After changing `boot/boot.hex`, Quartus took a *"MIF/HEX Update"* fast path
+  that regenerated the `.rbf` **without the new contents** — reporting success
+  in about a minute and emitting a byte-identical file. A conformance-test
+  build came out as the previous demo.
+* After an RTL change, an incremental full compile reported 0 errors and a
+  clean fit, but produced a bitstream that **did not work on hardware**.
+  *(Cause not yet isolated — it is either the incremental flow or the RTL
+  change itself. A clean rebuild of the same source is the experiment that
+  separates them.)*
+
+So: `rm -rf db incremental_db` before every compile that matters, and **verify
+the output actually changed** before flashing it:
+
+```sh
+md5sum output_files/X816.rbf            # compare against the previous build
+```
+
+A five-minute rebuild is cheaper than debugging a bitstream that isn't the one
+you think you are running.
 
 ## What it does today
 
