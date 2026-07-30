@@ -76,9 +76,18 @@ BRAM, the VERA bus pipeline and the MiSTer video path — and, because this
 bitstream carries the 352 KB VERA816 widening, that the widening did not break
 stock VERA behaviour.
 
-Not yet exercised on hardware: **SDRAM** — the boot stub runs entirely in bank
-`$00`, which is BRAM, so 15.9 MB of the 16 MB address space has never served a
-CPU access on silicon — along with the keyboard and audio.
+**SDRAM is confirmed on hardware too.** `sh boot/build.sh sdramtest` builds a
+bitstream carrying [boot/sdramtest.s](boot/sdramtest.s), which walks the bank
+address lines (A16-A23 across all 255 SDRAM banks), the mid and low address
+lines, and the data lines — each failing in a distinct colour so the screen
+names the fault class. It comes up green on a DE10-Nano.
+
+That proves the whole flat 16 MB, and with it the three load-bearing
+constraints in [rtl/flat_sdram.sv](rtl/flat_sdram.sv): the `ready` cone that
+must not compare live address bits, the `| we` term the '816's global clock
+enable depends on, and consume-clear read delivery.
+
+Not yet exercised on hardware: the keyboard, audio, and the SD card.
 
 Loading a program: OSD **Load Image** (or `boot1.rom` in the core's folder).
 The file's byte offset is its flat address, so an image linked for `$01:0000`
