@@ -44,3 +44,6 @@ boot/vramtest.o
 boot/vramtest.rom
 releases/
 boot/vramtest.hex
+boot/sdramtest.hex
+boot/sdramtest.o
+boot/sdramtest.rom
