@@ -43,3 +43,4 @@ jtag.cdf
 boot/vramtest.o
 boot/vramtest.rom
 releases/
+boot/vramtest.hex
