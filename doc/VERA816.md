@@ -97,6 +97,23 @@ until software opts in.
 
 Reserved bits must be written as 0 and read back as 0.
 
+**`ADDRX` is a live window, not a latch — normative.** It is part of the
+address registers, not a separate copy of their top bits. Reading it returns
+the *current* `ADDR0[18:17]` / `ADDR1[18:17]`, so it tracks auto-increment
+carry; writing it sets those bits immediately, regardless of the order
+relative to `ADDR_L`/`ADDR_M`/`ADDR_H` writes.
+
+This is easy to get wrong in a software implementation, where the natural
+thing is to store the written value and return it. The RTL gets the correct
+behaviour for free because the bits physically live in `vram_addr_{0,1}`; the
+emulator has to derive them. A shadow-latch implementation passes the
+conformance tests by accident — the march starts from zero, so a stale zero
+reads back as the correct zero — and then diverges the first time software
+reads the address after crossing a 128 KB boundary.
+
+`L0_BASEX` and `L1_BASEX` *are* ordinary latches; only `ADDRX` has this
+property.
+
 ### 4.2 Why MAPBASE and TILEBASE need two more bits each
 
 Current address arithmetic in `graphics/layer_renderer.v`:

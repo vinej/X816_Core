@@ -19,6 +19,7 @@ module addr_data(
     input wire         vram_addr_select,
     input wire   [5:0] dc_select,
 
+    output wire  [3:0] vera816_addrx,      // VERA816: {ADDR1[18:17], ADDR0[18:17]} for register readback
     output wire [18:0] vram_addr_0,
     output wire [18:0] vram_addr_1,
     output wire        vram_addr_nib_0,
@@ -74,6 +75,7 @@ module addr_data(
     reg  [7:0] vram_data0_r,                  vram_data0_next;
     reg  [7:0] vram_data1_r,                  vram_data1_next;
 
+    assign vera816_addrx = {vram_addr_1_r[18:17], vram_addr_0_r[18:17]};
     assign vram_addr_0 = vram_addr_0_r;
     assign vram_addr_1 = vram_addr_1_r;
     assign vram_addr_nib_0 = vram_addr_nib_0_r;
@@ -305,11 +307,13 @@ module addr_data(
     reg         fx_increment_on_overflow_r, fx_increment_on_overflow_next;
 
     reg  [18:0] vram_addr_0_untouched_or_set;
+    reg   [1:0] vram_addr_0_untouched_or_set_hi2;   // VERA816: address bits 18:17
     reg         vram_addr_0_untouched_or_set_bit16;
     reg         vram_addr_0_untouched_or_set_nibble;
     reg   [7:0] vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low;
 
     reg  [18:0] vram_addr_1_untouched_or_set;
+    reg   [1:0] vram_addr_1_untouched_or_set_hi2;   // VERA816: address bits 18:17
     reg         vram_addr_1_untouched_or_set_bit16;
     reg         vram_addr_1_untouched_or_set_nibble;
     reg   [7:0] vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low;
@@ -338,9 +342,15 @@ module addr_data(
     reg         fx_pixel_position_needs_to_be_updated;
 
     wire [18:0] vram_addr             = (access_addr == 5'h03) ? vram_addr_0_r : vram_addr_1_r;
-    wire is_audio_address             = (vram_addr[16:6]  == 'b11111100111);
-    wire is_palette_address           = (vram_addr[16:9]  == 'b11111101);
-    wire is_sprite_attr_address       = (vram_addr[16:10] == 'b1111111);
+    // VERA816: the palette / sprite-attr / audio windows live at the top of the
+    // ORIGINAL 128 KB, so they must only decode when bits 18:17 are zero.
+    // Without this qualifier an address such as $39F00 would alias onto the
+    // palette, which the emulator (comparing full absolute addresses) does not
+    // do -- a silent RTL-only divergence.
+    wire vram_addr_lo128k             = (vram_addr[18:17] == 2'b00);
+    wire is_audio_address             = vram_addr_lo128k && (vram_addr[16:6]  == 'b11111100111);
+    wire is_palette_address           = vram_addr_lo128k && (vram_addr[16:9]  == 'b11111101);
+    wire is_sprite_attr_address       = vram_addr_lo128k && (vram_addr[16:10] == 'b1111111);
 
     //////////////////////////////////////////////////////////////////////////
     // Calculation for X and Y accumulation
@@ -539,8 +549,22 @@ module addr_data(
             vram_addr_0_untouched_or_set_nibble = vram_addr_nib_0_r;
         end
 
-        vram_addr_0_untouched_or_set = { vram_addr_0_untouched_or_set_bit16, vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low};
-        vram_addr_1_untouched_or_set = { vram_addr_1_untouched_or_set_bit16, vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low};
+        // VERA816: address bits 18:17 come from ADDRX in the DCSEL=32
+        // extension bank ($9F29), because stock ADDR_H has no spare bits.
+        // Decoded here rather than in top.v so that the bits live with the
+        // address registers they belong to and take part in auto-increment
+        // carry -- ADDRX is a window onto vram_addr_{0,1}[18:17], not a
+        // separate latch. Layout: [1:0] ADDR0[18:17], [3:2] ADDR1[18:17].
+        if (do_write && access_addr == 5'h09 && dc_select == 6'd32) begin
+            vram_addr_0_untouched_or_set_hi2 = write_data[1:0];
+            vram_addr_1_untouched_or_set_hi2 = write_data[3:2];
+        end else begin
+            vram_addr_0_untouched_or_set_hi2 = vram_addr_0_r[18:17];
+            vram_addr_1_untouched_or_set_hi2 = vram_addr_1_r[18:17];
+        end
+
+        vram_addr_0_untouched_or_set = { vram_addr_0_untouched_or_set_hi2, vram_addr_0_untouched_or_set_bit16, vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low};
+        vram_addr_1_untouched_or_set = { vram_addr_1_untouched_or_set_hi2, vram_addr_1_untouched_or_set_bit16, vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low};
 
         //////////////////////////////////////////////////////////////////////////
         // ADDR0 control logic and assignment

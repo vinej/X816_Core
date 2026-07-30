@@ -128,7 +128,12 @@ module top(
     // are display control, 2-6 are VERA FX and 63 is the version registers, so
     // 32 sits clear of all three. All power up to 0, which makes VERA816
     // behave exactly like stock VERA until software opts in.
-    reg  [3:0] vera816_addrx_r,               vera816_addrx_next;   // [1:0] ADDR0[18:17], [3:2] ADDR1[18:17]
+    // VERA816 capability: populated VRAM in 16 KB units. 352 KB -> 22. Stock
+    // VERA has no such register and returns the version string here, so this
+    // is how software detects the extension (doc/VERA816.md section 4.1).
+    localparam [7:0] VERA816_VRAMCAP = 8'd22;
+
+    wire [3:0] vera816_addrx_r;   // from addr_data: {ADDR1[18:17], ADDR0[18:17]}
     reg  [3:0] l0_basex_r,                    l0_basex_next;        // [1:0] MAPBASE[9:8], [3:2] TILEBASE[9:8]
     reg  [3:0] l1_basex_r,                    l1_basex_next;
     reg        fpga_reconfigure_r,            fpga_reconfigure_next;
@@ -265,6 +270,7 @@ module top(
                 6'd0: rddata = dc_border_color_r;
                 6'd1: rddata = dc_active_vstop_r[8:1];
                 6'd5: rddata = fx_fill_length_high;
+                6'd32: rddata = VERA816_VRAMCAP;                          // VERA816 VRAMCAP
                 default: rddata = VERA_VERSION_PATCH;
             endcase
         end
@@ -372,7 +378,6 @@ module top(
     always @* begin
         vram_addr_select_next            = vram_addr_select_r;
         dc_select_next                   = dc_select_r;
-        vera816_addrx_next               = vera816_addrx_r;
         l0_basex_next                    = l0_basex_r;
         l1_basex_next                    = l1_basex_r;
         fpga_reconfigure_next            = fpga_reconfigure_r;
@@ -486,8 +491,10 @@ module top(
                     end else if (dc_select_r == 3'd1) begin
                         dc_active_hstop_next[9:2] = write_data;
                         dc_active_hstop_next[1:0] = 0;
+                    end else if (dc_select_r == 6'd32) begin
+                        l0_basex_next             = write_data[3:0];  // VERA816 L0_BASEX
                     end
-                    // else: ignore (no-op for DCSEL>=2)
+                    // else: ignore (no-op for other DCSEL values)
                 end
                 5'h0B: begin
                     if (dc_select_r == 3'd0) begin
@@ -495,8 +502,10 @@ module top(
                     end else if (dc_select_r == 3'd1) begin
                         dc_active_vstart_next[8:1] = write_data;
                         dc_active_vstart_next[0]   = 0;
+                    end else if (dc_select_r == 6'd32) begin
+                        l1_basex_next              = write_data[3:0];  // VERA816 L1_BASEX
                     end
-                    // else: ignore (no-op for DCSEL>=2)
+                    // else: ignore (no-op for other DCSEL values)
                 end
                 5'h0C: begin
                     if (dc_select_r == 3'd0) begin
@@ -619,7 +628,6 @@ module top(
             l0_map_height_r               <= 0;
             l0_map_width_r                <= 0;
             l0_map_baseaddr_r             <= 0;
-            vera816_addrx_r               <= 0;
             l0_basex_r                    <= 0;
             l1_basex_r                    <= 0;
             l0_tile_baseaddr_r            <= 0;
@@ -651,7 +659,6 @@ module top(
         end else begin
             vram_addr_select_r            <= vram_addr_select_next;
             dc_select_r                   <= dc_select_next;
-            vera816_addrx_r               <= vera816_addrx_next;
             l0_basex_r                    <= l0_basex_next;
             l1_basex_r                    <= l1_basex_next;
             fpga_reconfigure_r            <= fpga_reconfigure_next;
@@ -729,6 +736,7 @@ module top(
         .vram_addr_select(vram_addr_select_r),
         .dc_select(dc_select_r),
 
+        .vera816_addrx(vera816_addrx_r),
         .vram_addr_0(vram_addr_0_r),
         .vram_addr_1(vram_addr_1_r),
         .vram_addr_nib_0(vram_addr_nib_0_r),
