@@ -142,6 +142,16 @@ the guest; the HPS only moves 512-byte blocks.
 untouched), 4 = rewind the buffer window.
 `STATUS`: bit 0 busy, bit 1 error, bit 7 card present.
 
+**Error means "that block is not on this card".** Every request is
+bounds-checked against the mounted image's size, per block, so a multi-block
+read that runs off the end fails at the block that does and leaves the earlier
+ones in memory. An unmounted card reads as zero blocks, so every request
+errors — which is what a caller wants when there is no card. This check is the
+device's *only* way to fail: `hps_io` has no error line, so without it a
+request past the end returns whatever the HPS supplies and `ack` still
+arrives. A block device that always reports success is worse than a slow one,
+because the filesystem above it cannot tell a short card from a good one.
+
 **Software never polls.** The CPU is frozen for the whole transfer, so the
 instruction after the `CMD` write executes once it has completed — read
 `$9F89` afterwards to check for an error. Busy therefore always reads back 0;

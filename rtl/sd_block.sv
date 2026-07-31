@@ -233,9 +233,24 @@ module sd_block (
     // Card presence.  img_mounted is a pulse in the sdram domain; latch it
     // and expose the level.  img_size == 0 means "unmounted".
     // ------------------------------------------------------------------
+    // img_blocks is latched with it, and is what bounds-checks every request.
+    // Without it the device cannot fail: hps_io has no error line, so a
+    // request past the end of the image simply returns whatever the HPS feels
+    // like and ack still arrives. sdtest went white on test 6 for exactly
+    // this -- five tests passed and the sixth asked the device to fail, which
+    // it had no way of doing. A block device that always reports success is
+    // worse than one that is slow: the filesystem above it cannot tell a
+    // short card from a good one.
+    //
+    // Unmounted reads as zero blocks, so every request errors, which is the
+    // behaviour a caller wants when there is no card.
     logic present_sd;
+    logic [31:0] img_blocks = 32'd0;
     always_ff @(posedge sdram_clk) begin
-        if (img_mounted) present_sd <= (img_size != 64'd0);
+        if (img_mounted) begin
+            present_sd <= (img_size != 64'd0);
+            img_blocks <= img_size[40:9];      // bytes -> 512-byte blocks
+        end
     end
     logic [1:0] present_sync;
     always_ff @(posedge clk) present_sync <= {present_sync[0], present_sd};
@@ -376,11 +391,20 @@ module sd_block (
                 end
             end
 
+            // Bounds-check EVERY block, not just the first, so a multi-block
+            // read that runs off the end fails at the block that does -- the
+            // earlier blocks are already in memory, which is what the caller
+            // sees from the emulator too.
             S_REQ: begin
-                sd_lba <= lba_r;
-                if (cmd_r == CMD_WRITE) sd_wr <= 1'b1;
-                else                    sd_rd <= 1'b1;
-                st <= S_WAIT;
+                if (lba_r >= img_blocks) begin
+                    err_sd <= 1'b1;
+                    st     <= S_DONE;
+                end else begin
+                    sd_lba <= lba_r;
+                    if (cmd_r == CMD_WRITE) sd_wr <= 1'b1;
+                    else                    sd_rd <= 1'b1;
+                    st <= S_WAIT;
+                end
             end
 
             // hps_io holds sd_ack high while it streams the buffer; the
