@@ -249,7 +249,7 @@ module sd_block (
     localparam CMD_READBUF = 2'd3;
 
     typedef enum logic [2:0] {
-        S_IDLE, S_REQ, S_WAIT, S_DMA_PRE, S_DMA, S_NEXT, S_DONE
+        S_IDLE, S_REQ, S_WAIT, S_DMA_ADDR, S_DMA_WR, S_NEXT, S_DONE
     } state_t;
     state_t st;
 
@@ -322,9 +322,12 @@ module sd_block (
 
         // Readers: the DMA while streaming, the HPS while it takes a block for
         // a card write, the CPU's window otherwise.
-        if (st == S_DMA || st == S_DMA_PRE) buf_ra = dma_i;
-        else if (st != S_IDLE)              buf_ra = sd_buff_addr;
-        else                                buf_ra = bufptr_s2;
+        // buf_ra holds dma_i across BOTH DMA states, so the byte presented
+        // in S_DMA_ADDR is still the one buf_q carries in S_DMA_WR -- and it
+        // stays valid if dma_busy holds us there.
+        if (st == S_DMA_ADDR || st == S_DMA_WR) buf_ra = dma_i;
+        else if (st != S_IDLE)                  buf_ra = sd_buff_addr;
+        else                                    buf_ra = bufptr_s2;
     end
 
     always_ff @(posedge sdram_clk) begin
@@ -391,31 +394,43 @@ module sd_block (
                 if (ack_q & ~sd_ack) begin
                     if (cmd_r == CMD_READ) begin
                         dma_i <= 9'd0;
-                        st    <= S_DMA_PRE;
+                        st    <= S_DMA_ADDR;
                     end else begin
                         st <= S_NEXT;
                     end
                 end
             end
 
-            // ONE CYCLE OF PRIMING, AND IT IS NOT OPTIONAL.
+            // TWO STATES PER BYTE, AND THE SPLIT IS NOT OPTIONAL.
+            //
             // buf_q is a REGISTERED read: the byte for address N appears the
-            // cycle AFTER N is presented.  Without this state the first write
-            // would carry whatever the previous read left behind, and every
-            // byte of every block would be shifted by one -- a fault the
-            // emulator cannot reproduce, because it models no read pipeline.
-            S_DMA_PRE: st <= S_DMA;
+            // cycle AFTER N is presented.  A single state cannot both present
+            // dma_i and consume buf_q, because dma_i only increments at the
+            // END of the cycle -- so buf_q lags by one and every byte after
+            // the first repeats its predecessor.  That is exactly what
+            // hardware did: sdtest went blue on test 3 while the emulator
+            // stayed green, because the emulator models no read pipeline.
+            //
+            // Presenting the address one state early and consuming it in the
+            // next is the boring, obviously-correct shape.  It costs 1024
+            // sdram cycles per block, about 10 us at 100 MHz -- nothing
+            // against the HPS round trip that fetched the block.
+            S_DMA_ADDR: st <= S_DMA_WR;
 
-            // Stream the buffer into main memory.  dma_busy is the loader
-            // FIFO's backpressure -- hold the index while it is asserted, and
-            // buf_q holds with it, because buf_ra follows dma_i.
-            S_DMA: begin
+            // dma_busy is the loader FIFO's backpressure.  Holding here is
+            // safe: buf_ra is still dma_i, so buf_q keeps presenting the same
+            // byte until the write is accepted.
+            S_DMA_WR: begin
                 if (!dma_busy) begin
                     dma_wr   <= 1'b1;
                     dma_addr <= mem_r + {15'd0, dma_i};
                     dma_data <= buf_q;
-                    if (dma_i == 9'd511) st <= S_NEXT;
-                    else                 dma_i <= dma_i + 9'd1;
+                    if (dma_i == 9'd511) begin
+                        st <= S_NEXT;
+                    end else begin
+                        dma_i <= dma_i + 9'd1;
+                        st    <= S_DMA_ADDR;
+                    end
                 end
             end
 
