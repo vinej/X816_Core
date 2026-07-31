@@ -57,3 +57,7 @@ boot/kbd.bin
 
 # Quartus compile log left by an interactive build
 c5.log
+
+# Conformance-test disk images: regenerate with boot/mksdtest.py and
+# boot/mkfat32.py rather than carrying 64 MB in the repository.
+boot/*.img

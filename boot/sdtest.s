@@ -32,8 +32,9 @@ SD_MEM0        = $9F85
 SD_MEM1        = $9F86
 SD_MEM2        = $9F87
 SD_COUNT       = $9F88
-SD_CMD         = $9F89
-SD_DATA        = $9F8A
+SD_CMD         = $9F89          ; write only
+SD_STATUS      = $9F8A          ; read only -- see rtl/sd_block.sv
+SD_DATA        = $9F8C          ; $9F8B is a mandatory gap below it
 
 CMD_READ       = 1
 CMD_WRITE      = 2
@@ -72,7 +73,7 @@ start:
 .i8
 
 ; ---- test 1: is a card mounted? --------------------------------------------
-        lda     SD_CMD
+        lda     SD_STATUS
         and     #ST_PRESENT
         bne     t1_ok
         lda     #1
@@ -85,7 +86,7 @@ t1_ok:
         jsr     set_lba3
         lda     #CMD_READBUF
         sta     SD_CMD
-        lda     SD_CMD
+        lda     SD_STATUS
         and     #ST_ERROR
         beq     t2_read
         lda     #2
@@ -125,7 +126,7 @@ t3:
         sta     SD_COUNT
         lda     #CMD_READ
         sta     SD_CMD                  ; the CPU is frozen until this completes
-        lda     SD_CMD
+        lda     SD_STATUS
         and     #ST_ERROR
         beq     t3_check
         lda     #3
@@ -167,7 +168,7 @@ t3_next:
         sta     SD_COUNT
         lda     #CMD_READ
         sta     SD_CMD
-        lda     SD_CMD
+        lda     SD_STATUS
         and     #ST_ERROR
         beq     t4_check
         lda     #4
@@ -205,7 +206,7 @@ t5_fill2:
         jsr     set_lba64
         lda     #CMD_WRITE
         sta     SD_CMD
-        lda     SD_CMD
+        lda     SD_STATUS
         and     #ST_ERROR
         beq     t5_back
         lda     #5
@@ -240,7 +241,7 @@ t5_next:
         stz     SD_LBA3                 ; LBA $00FFFFFF -- far past any image
         lda     #CMD_READBUF
         sta     SD_CMD
-        lda     SD_CMD
+        lda     SD_STATUS
         and     #ST_ERROR
         bne     all_ok
         lda     #6

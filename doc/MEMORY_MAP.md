@@ -134,7 +134,8 @@ the guest; the HPS only moves 512-byte blocks.
 | `$9F85-$9F87` | `MEM[23:0]` DMA address, little-endian |
 | `$9F88` | `COUNT` — blocks, 1-255 (`READ` only) |
 | `$9F89` | write: `CMD`  ·  read: `STATUS` |
-| `$9F8A` | `DATA` — block-buffer window, auto-incrementing |
+| `$9F8A` | **reserved — must stay unmapped**, see below |
+| `$9F8B` | `DATA` — block-buffer window, auto-incrementing |
 
 `CMD`: 1 = `READ` (card → memory, `COUNT` blocks, by DMA), 2 = `WRITE`
 (buffer → card, one block), 3 = `READBUF` (card → buffer, one block, memory
@@ -150,6 +151,16 @@ not exposed in SYSCTL.
 `READBUF` exists because a FAT chain walk or a directory scan inspects a few
 bytes of a sector, and copying it into RAM first would be wasted work.
 
+**`$9F8A` is a deliberate gap and nothing readable may ever go there.** `DATA`
+has a read side effect — it advances the buffer pointer — and a 16-bit read is
+two bus cycles, so reading the register immediately *below* `DATA` also reads
+`DATA` and eats a byte. With `DATA` at `$9F8A`, next to `STATUS`, every status
+check silently consumed a byte of the sector. That is not an exotic case: the
+Calypsi manual states the compiler "may generate code that reads 8 and 24 bit
+objects using 16 bit access", so an ordinary C status poll does it. It showed
+up as an assembly test passing while the identical C sequence failed. Only the
+register *below* a side-effecting one is at risk; registers above it are fine.
+
 **This is not the X16's SD path.** The X16 bit-bangs VERA's SPI at `$9F3E` with
 an emulated SPI card behind it — CMD17/CMD24, CRC7, R1 polling, one byte per
 transfer, and a CPU stall on `$9F3E` reads to stop a fast write loop dropping
@@ -164,7 +175,7 @@ through the CPU port, which means muxing into the stall network that
 hot path for a filesystem; writes are rare, and buffered writes are still far
 faster than SPI because there is no per-byte command overhead.
 
-`$9F8B-$9F8F` free — the firmware write-protect enable goes here.
+`$9F8C-$9F8F` free — the firmware write-protect enable goes here.
 
 ---
 

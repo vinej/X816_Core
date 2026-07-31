@@ -45,22 +45,55 @@
 //
 // Software therefore never polls: the instruction following the command write
 // executes after the transfer has completed.  Read $9F89 afterwards to check
-// for an error.
+// for an error at $9F8A.
 //
-// REGISTERS -- $9F81-$9F8A, in the SYSCTL page.  See doc/MEMORY_MAP.md.
+// REGISTERS -- $9F81-$9F8C, in the SYSCTL page.  See doc/MEMORY_MAP.md.
 //
 //   $9F81-$9F84  LBA[31:0]      block number, little-endian
 //   $9F85-$9F87  MEM[23:0]      DMA address, little-endian (READ only)
 //   $9F88        COUNT          blocks to transfer, 1-255 (READ only)
-//   $9F89        CMD (write)    1 = READ, 2 = WRITE, 3 = READBUF, 4 = RESET
-//                STATUS (read)  bit0 busy, bit1 error, bit7 card present
-//   $9F8A        DATA           block-buffer window, auto-incrementing
+//   $9F89        CMD            WRITE ONLY. 1 = READ, 2 = WRITE,
+//                                3 = READBUF, 4 = RESET
+//   $9F8A        STATUS         READ ONLY. bit0 busy, bit1 error,
+//                                bit7 card present
+//   $9F8B        -- MUST STAY UNMAPPED, see below --
+//   $9F8C        DATA           block-buffer window, auto-incrementing
+//
+// CMD AND STATUS ARE SEPARATE ADDRESSES ON PURPOSE.
+//
+// The obvious design is one register: write a command, read the status back.
+// It does not survive a C compiler. Calypsi ELIDES A VOLATILE READ that
+// immediately follows a volatile write to the SAME address, and then tests
+// the value it wrote instead. Reduced to three functions and read off the
+// listing:
+//
+//     SD_CMD = 3; return SD_CMD & 2;              -> read elided
+//     SD_CMD = 3; s = SD_CMD; return s & 2;       -> read elided
+//     SD_CMD = 3; other_io = 0; return SD_CMD & 2;-> read emitted
+//
+// So every status check returned "error", because the command value 3 has
+// bit 1 set. Splitting the addresses removes the hazard at the source: a read
+// of STATUS is never a read of the address just written, so there is nothing
+// for an optimiser to fold. It is also the more honest description of the
+// hardware -- these were always two different registers wearing one address.
+//
+// $9F8B IS A DELIBERATE GAP AND MUST STAY ONE.
+//
+// DATA has a read SIDE EFFECT: it advances the buffer pointer. A 16-bit read
+// is two bus cycles, so reading the register immediately BELOW DATA also
+// reads DATA and consumes a byte. With DATA at $9F8A -- adjacent to STATUS --
+// every status poll silently ate a byte of the sector, and the C compiler
+// makes this routine rather than exotic: Calypsi's manual states it "may
+// generate code that reads 8 and 24 bit objects using 16 bit access".
+//
+// Nothing readable may ever be placed at $9F8B. Registers ABOVE DATA are
+// safe -- only the one below it is not.
 //
 // READ streams COUNT blocks straight into memory.  READBUF fetches ONE block
 // into the buffer without touching memory -- which is what a FAT chain walk
 // or a directory scan wants, since those inspect a few bytes of a sector and
 // copying it into RAM first would be wasted work.  WRITE sends the buffer,
-// which the CPU fills through $9F8A.
+// which the CPU fills through $9F8C.
 //
 // Writes go through the buffer rather than by DMA on purpose: the loader
 // ports are write-only, so a memory-to-card DMA would have to read main
@@ -116,7 +149,7 @@ module sd_block (
     // Buffer window pointer, CPU side.
     logic  [8:0] bufptr;
 
-    wire   sub_sel = cs & (addr >= 4'h1) & (addr <= 4'hA);
+    wire   sub_sel = cs & (addr >= 4'h1) & (addr <= 4'hC) & (addr != 4'hB);
     assign rd_sel  = sub_sel;
 
     // done toggle coming back from the sdram domain
@@ -168,19 +201,19 @@ module sd_block (
                             default: ;
                         endcase
                     end
-                    4'hA: bufptr <= bufptr + 9'd1;   // data written below
+                    4'hC: bufptr <= bufptr + 9'd1;   // data written below
                     default: ;
                 endcase
             end
             // A read of the data window advances the pointer too.
-            if (cs & ~we & (addr == 4'hA) & ~busy)
+            if (cs & ~we & (addr == 4'hC) & ~busy)
                 bufptr <= bufptr + 9'd1;
         end
     end
 
     // Buffer, CPU side (port A).  Written on a $9F8A write, read continuously.
     logic [7:0] buf_a_q;
-    wire        buf_a_we = cs & we & (addr == 4'hA) & ~busy;
+    wire        buf_a_we = cs & we & (addr == 4'hC) & ~busy;
 
     always_comb begin
         case (addr)
@@ -192,8 +225,8 @@ module sd_block (
             4'h6:    rd_data = r_mem[15:8];
             4'h7:    rd_data = r_mem[23:16];
             4'h8:    rd_data = r_count;
-            4'h9:    rd_data = {card_present, 5'b0, err_cpu, busy};
-            4'hA:    rd_data = buf_a_q;
+            4'hA:    rd_data = {card_present, 5'b0, err_cpu, busy};
+            4'hC:    rd_data = buf_a_q;
             default: rd_data = 8'h00;
         endcase
     end
