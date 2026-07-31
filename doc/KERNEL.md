@@ -344,6 +344,8 @@ The console and file management both stand on FAT32, so:
 2. FAT32 read **done and green on hardware** — `runtime/fat32.c` in
    X816_Calypsi, with `examples/fat32` green on a DE10-Nano. Write is next.
 3. Native API §5, and its tests
-4. Console, then the prompt — [SHELL.md](SHELL.md)
+4. Console **done and green on hardware** (output; the keyboard read is
+   still unverified there) — `runtime/console.c` in X816_Calypsi. Then
+   the prompt: [SHELL.md](SHELL.md)
 5. Convert X816_Library to §5 (§6) — file and console calls first, then
    retarget `gfx/fb` and `gfx/graph` onto the library's own primitives
