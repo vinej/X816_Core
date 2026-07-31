@@ -20,13 +20,12 @@
 // natural shape, the FAT32 code gets much simpler, and the read-stall hack
 // disappears because it was a consequence of the SPI approach.
 //
-// CLOCKING -- the reason this module is as simple as it is
+// CLOCKING
 //
 // hps_io runs on clk_sys, and in x816.sv clk_sys IS sdram_clk (100 MHz), the
 // same domain as flat_sdram's and bank0_ram's loader ports.  So the block
-// buffer, the HPS handshake and the DMA all live in ONE domain and need no
-// synchronisers between them.  The only clock crossing is the CPU register
-// interface, and it is made trivial by the stall (below).
+// buffer, the HPS handshake and the DMA all live in ONE domain.  Only the CPU
+// register interface crosses, and the stall makes that nearly free.
 //
 // THE STALL IS LOAD-BEARING, NOT LAZINESS
 //
@@ -44,8 +43,8 @@
 // the instruction after the command write run before the stall took effect.
 //
 // Software therefore never polls: the instruction following the command write
-// executes after the transfer has completed.  Read $9F89 afterwards to check
-// for an error at $9F8A.
+// executes after the transfer has completed.  Read $9F8A afterwards to check
+// for an error.
 //
 // REGISTERS -- $9F81-$9F8C, in the SYSCTL page.  See doc/MEMORY_MAP.md.
 //
@@ -160,6 +159,9 @@ module sd_block (
     logic err_sd;                       // sdram domain
     logic [1:0] err_sync;
 
+    logic [7:0] cpu_rd_s2;              // the CPU's view of the buffer window
+    wire        buf_a_we = cs & we & (addr == 4'hC) & ~busy;
+
     always_ff @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
             r_lba <= 32'd0; r_mem <= 24'd0; r_count <= 8'd1;
@@ -211,10 +213,6 @@ module sd_block (
         end
     end
 
-    // Buffer, CPU side (port A).  Written on a $9F8A write, read continuously.
-    logic [7:0] buf_a_q;
-    wire        buf_a_we = cs & we & (addr == 4'hC) & ~busy;
-
     always_comb begin
         case (addr)
             4'h1:    rd_data = r_lba[7:0];
@@ -226,7 +224,7 @@ module sd_block (
             4'h7:    rd_data = r_mem[23:16];
             4'h8:    rd_data = r_count;
             4'hA:    rd_data = {card_present, 5'b0, err_cpu, busy};
-            4'hC:    rd_data = buf_a_q;
+            4'hC:    rd_data = cpu_rd_s2;
             default: rd_data = 8'h00;
         endcase
     end
@@ -244,65 +242,16 @@ module sd_block (
     assign card_present = present_sync[1];
 
     // ------------------------------------------------------------------
-    // 512-byte block buffer -- true dual port, A = cpu_clk, B = sdram_clk.
-    // The two sides never touch it at the same time: the CPU fills or drains
-    // it only while idle, the HPS and the DMA only while busy.
-    //
-    // THE WRITE-FIRST SHAPE BELOW IS MANDATORY, NOT A PREFERENCE.
-    //
-    // Both ports must be written as "on a write, forward the written byte to
-    // the output; otherwise read memory" -- Altera's true-dual-port template.
-    // The obvious alternative, an unconditional read alongside the write,
-    // asks for READ-OLD-DATA behaviour, and a Cyclone V M10K in true dual
-    // port mode with TWO CLOCKS cannot do that. Quartus does not explain
-    // itself; it just refuses:
-    //
-    //   Error (276001): Cannot synthesize dual-port RAM logic
-    //                   "emu:emu|sd_block:u_sd|blkbuf"
-    //
-    // Forwarding costs nothing here. Port A only ever reads back a byte the
-    // CPU wrote at the previous pointer, and port B's output is unused during
-    // an HPS write.
-    // ------------------------------------------------------------------
-    (* ramstyle = "M10K" *) logic [7:0] blkbuf [0:511];
-
-    logic [8:0] buf_b_addr;
-    logic       buf_b_we;
-    logic [7:0] buf_b_din;
-    logic [7:0] buf_b_q;
-
-    always_ff @(posedge clk) begin
-        if (buf_a_we) begin
-            blkbuf[bufptr] <= wr_data;
-            buf_a_q        <= wr_data;
-        end else begin
-            buf_a_q        <= blkbuf[bufptr];
-        end
-    end
-
-    always_ff @(posedge sdram_clk) begin
-        if (buf_b_we) begin
-            blkbuf[buf_b_addr] <= buf_b_din;
-            buf_b_q            <= buf_b_din;
-        end else begin
-            buf_b_q            <= blkbuf[buf_b_addr];
-        end
-    end
-
-    // ------------------------------------------------------------------
-    // Transfer FSM (sdram_clk)
+    // FSM state -- declared before the buffer, whose read mux looks at it
     // ------------------------------------------------------------------
     localparam CMD_READ    = 2'd1;
     localparam CMD_WRITE   = 2'd2;
     localparam CMD_READBUF = 2'd3;
 
     typedef enum logic [2:0] {
-        S_IDLE, S_REQ, S_WAIT, S_DMA, S_NEXT, S_DONE
+        S_IDLE, S_REQ, S_WAIT, S_DMA_PRE, S_DMA, S_NEXT, S_DONE
     } state_t;
     state_t st;
-
-    logic [2:0] start_sync;
-    wire        start_pulse = start_sync[2] ^ start_sync[1];
 
     logic [31:0] lba_r;
     logic [23:0] mem_r;
@@ -310,6 +259,95 @@ module sd_block (
     logic  [1:0] cmd_r;
     logic  [8:0] dma_i;
     logic        ack_q;
+
+    // ------------------------------------------------------------------
+    // 512-byte block buffer -- ONE clock, one write port, one read port.
+    //
+    // NOT true dual port, and not for want of trying.  Quartus will not infer
+    // TDP across two clocks on this part:
+    //
+    //   Error (276001): Cannot synthesize dual-port RAM logic "...|blkbuf"
+    //
+    // and it refuses identically whether the ports read old data or forward
+    // the written byte (Altera's own documented TDP template).  bank0_ram.sv
+    // already says why in its header -- "M10K has two ports and the read port
+    // owns one, so the loader cannot have a port of its own" -- and solves it
+    // the way this now does: mux the writers onto one port, dedicate the other
+    // to reads, one clock domain.
+    //
+    // So the buffer lives entirely on sdram_clk and the CPU's accesses cross
+    // into it.  The timing is comfortable rather than tight: sdram_clk is
+    // 100 MHz against an 8 MHz CPU, and two consecutive `lda SD_DATA` are at
+    // least four CPU cycles apart -- around fifty sdram cycles.  The pointer is
+    // stable for hundreds of nanoseconds before either side looks at it.
+    // ------------------------------------------------------------------
+    (* ramstyle = "M10K" *) logic [7:0] blkbuf [0:511];
+
+    // ---- CPU write, carried across by a toggle ----
+    // The address is captured AT the write.  bufptr increments on the same
+    // edge, so sampling it afterwards would write to the next slot.
+    logic [8:0] cpu_wr_addr;
+    logic [7:0] cpu_wr_data;
+    logic       cpu_wr_tgl;
+    always_ff @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            cpu_wr_addr <= 9'd0; cpu_wr_data <= 8'd0; cpu_wr_tgl <= 1'b0;
+        end else if (buf_a_we) begin
+            cpu_wr_addr <= bufptr;
+            cpu_wr_data <= wr_data;
+            cpu_wr_tgl  <= ~cpu_wr_tgl;
+        end
+    end
+
+    logic [2:0] cpu_wr_sync;
+    wire        cpu_wr_pulse = cpu_wr_sync[2] ^ cpu_wr_sync[1];
+    logic [8:0] bufptr_s1, bufptr_s2;
+    always_ff @(posedge sdram_clk) begin
+        cpu_wr_sync <= {cpu_wr_sync[1:0], cpu_wr_tgl};
+        bufptr_s1   <= bufptr;
+        bufptr_s2   <= bufptr_s1;
+    end
+
+    // ---- the one write port and the one read port ----
+    logic [8:0] buf_wa, buf_ra;
+    logic       buf_we;
+    logic [7:0] buf_wd, buf_q;
+
+    always_comb begin
+        // Writers: the HPS while a block is arriving, the CPU while idle.
+        // Never both -- the CPU is stalled for the whole transfer.
+        buf_we = sd_buff_wr | cpu_wr_pulse;
+        buf_wa = sd_buff_wr ? sd_buff_addr : cpu_wr_addr;
+        buf_wd = sd_buff_wr ? sd_buff_dout : cpu_wr_data;
+
+        // Readers: the DMA while streaming, the HPS while it takes a block for
+        // a card write, the CPU's window otherwise.
+        if (st == S_DMA || st == S_DMA_PRE) buf_ra = dma_i;
+        else if (st != S_IDLE)              buf_ra = sd_buff_addr;
+        else                                buf_ra = bufptr_s2;
+    end
+
+    always_ff @(posedge sdram_clk) begin
+        if (buf_we) blkbuf[buf_wa] <= buf_wd;
+        buf_q <= blkbuf[buf_ra];
+    end
+
+    assign sd_buff_din = buf_q;
+
+    // The CPU samples buf_q through two flops.  It is stable long before the
+    // access -- see the timing note above -- so this is metastability
+    // protection, not a handshake.
+    logic [7:0] cpu_rd_s1;
+    always_ff @(posedge clk) begin
+        cpu_rd_s1 <= buf_q;
+        cpu_rd_s2 <= cpu_rd_s1;
+    end
+
+    // ------------------------------------------------------------------
+    // Transfer FSM (sdram_clk)
+    // ------------------------------------------------------------------
+    logic [2:0] start_sync;
+    wire        start_pulse = start_sync[2] ^ start_sync[1];
 
     always_ff @(posedge sdram_clk or negedge reset_n) begin
         if (!reset_n) begin
@@ -343,8 +381,8 @@ module sd_block (
             end
 
             // hps_io holds sd_ack high while it streams the buffer; the
-            // request is dropped on ack and the transfer is complete when
-            // ack falls again.
+            // request is dropped on ack and the transfer is complete when ack
+            // falls again.
             S_WAIT: begin
                 if (sd_ack) begin
                     sd_rd <= 1'b0;
@@ -353,20 +391,29 @@ module sd_block (
                 if (ack_q & ~sd_ack) begin
                     if (cmd_r == CMD_READ) begin
                         dma_i <= 9'd0;
-                        st    <= S_DMA;
+                        st    <= S_DMA_PRE;
                     end else begin
                         st <= S_NEXT;
                     end
                 end
             end
 
+            // ONE CYCLE OF PRIMING, AND IT IS NOT OPTIONAL.
+            // buf_q is a REGISTERED read: the byte for address N appears the
+            // cycle AFTER N is presented.  Without this state the first write
+            // would carry whatever the previous read left behind, and every
+            // byte of every block would be shifted by one -- a fault the
+            // emulator cannot reproduce, because it models no read pipeline.
+            S_DMA_PRE: st <= S_DMA;
+
             // Stream the buffer into main memory.  dma_busy is the loader
-            // FIFO's backpressure -- hold the index when it is asserted.
+            // FIFO's backpressure -- hold the index while it is asserted, and
+            // buf_q holds with it, because buf_ra follows dma_i.
             S_DMA: begin
                 if (!dma_busy) begin
                     dma_wr   <= 1'b1;
                     dma_addr <= mem_r + {15'd0, dma_i};
-                    dma_data <= buf_b_q;
+                    dma_data <= buf_q;
                     if (dma_i == 9'd511) st <= S_NEXT;
                     else                 dma_i <= dma_i + 9'd1;
                 end
@@ -389,20 +436,5 @@ module sd_block (
             endcase
         end
     end
-
-    // Port B is the HPS's while a request is in flight, the DMA's afterwards.
-    always_comb begin
-        if (st == S_DMA) begin
-            buf_b_addr = dma_i;
-            buf_b_we   = 1'b0;
-            buf_b_din  = 8'h00;
-        end else begin
-            buf_b_addr = sd_buff_addr;
-            buf_b_we   = sd_buff_wr;
-            buf_b_din  = sd_buff_dout;
-        end
-    end
-
-    assign sd_buff_din = buf_b_q;
 
 endmodule
