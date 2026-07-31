@@ -119,7 +119,52 @@ not `$00` — returning zero makes device-probing code false-positive.
 
 **SYSCTL `$9F80`** — bit 0 boot ROM overlay enable (1 at reset, write 0 to drop
 it); bit 1 reads the CPU's live E flag, so software can assert it is really in
-native mode. `$9F81-$9F8F` free — the firmware write-protect enable goes here.
+native mode.
+
+### SD block device — `$9F81-$9F8A`
+
+`rtl/sd_block.sv`, and `src/sdblock.c` in the emulator. The guest SD card is a
+FAT32 image file on the MiSTer's own SD card, mounted from the OSD
+(`SC0,IMG,Mount SD`) and served block-by-block by the HPS. FAT32 is parsed by
+the guest; the HPS only moves 512-byte blocks.
+
+| Address | Register |
+|---|---|
+| `$9F81-$9F84` | `LBA[31:0]`, little-endian |
+| `$9F85-$9F87` | `MEM[23:0]` DMA address, little-endian |
+| `$9F88` | `COUNT` — blocks, 1-255 (`READ` only) |
+| `$9F89` | write: `CMD`  ·  read: `STATUS` |
+| `$9F8A` | `DATA` — block-buffer window, auto-incrementing |
+
+`CMD`: 1 = `READ` (card → memory, `COUNT` blocks, by DMA), 2 = `WRITE`
+(buffer → card, one block), 3 = `READBUF` (card → buffer, one block, memory
+untouched), 4 = rewind the buffer window.
+`STATUS`: bit 0 busy, bit 1 error, bit 7 card present.
+
+**Software never polls.** The CPU is frozen for the whole transfer, so the
+instruction after the `CMD` write executes once it has completed — read
+`$9F89` afterwards to check for an error. Busy therefore always reads back 0;
+the CPU cannot observe itself stalled, for the same reason `cpu_wait_state` is
+not exposed in SYSCTL.
+
+`READBUF` exists because a FAT chain walk or a directory scan inspects a few
+bytes of a sector, and copying it into RAM first would be wasted work.
+
+**This is not the X16's SD path.** The X16 bit-bangs VERA's SPI at `$9F3E` with
+an emulated SPI card behind it — CMD17/CMD24, CRC7, R1 polling, one byte per
+transfer, and a CPU stall on `$9F3E` reads to stop a fast write loop dropping
+bytes. X816's kernel is written from scratch (see [KERNEL.md](KERNEL.md)), so
+there is nothing to be compatible with: a 24-bit DMA address is the natural
+shape for a flat 16 MB machine, and the stall hack disappears with the SPI.
+
+Writes go through the buffer rather than by DMA on purpose. The memory loader
+ports are write-only, so a memory-to-card DMA would have to read main memory
+through the CPU port, which means muxing into the stall network that
+[rtl/flat_sdram.sv](../rtl/flat_sdram.sv) warns about at length. Reads are the
+hot path for a filesystem; writes are rare, and buffered writes are still far
+faster than SPI because there is no per-byte command overhead.
+
+`$9F8B-$9F8F` free — the firmware write-protect enable goes here.
 
 ---
 

@@ -116,6 +116,11 @@ module emu
     // ========================================================================
     localparam CONF_STR = {
         "X816;;",
+        // "SC" rather than plain "S": MiSTer Main only REMEMBERS and
+        // auto-remounts SC entries at core start (user_io.cpp checks 'S','C'),
+        // which is what makes the last-mounted image come back by itself.
+        // A plain "S" would mount from the OSD but forget it on the next boot.
+        "SC0,IMG,Mount SD;",
         "-;",
         "F1,BIN,Load Image;",       // ioctl index 1 -> flat memory, addr = file offset
         "-;",
@@ -138,10 +143,16 @@ module emu
     wire [15:0]  ioctl_index;
     wire         ioctl_wait;
 
-    // No virtual block devices in this build -- tie the sd_* inputs off.
-    wire [31:0] sd_lba[1];      assign sd_lba[0]      = 32'd0;
-    wire  [5:0] sd_blk_cnt[1];  assign sd_blk_cnt[0]  = 6'd0;
-    wire  [7:0] sd_buff_din[1]; assign sd_buff_din[0] = 8'd0;
+    // One virtual block device: the guest SD card (rtl/sd_block.sv).
+    wire [31:0] sd_lba[1];
+    wire  [5:0] sd_blk_cnt[1];  assign sd_blk_cnt[0]  = 6'd0;  // one block per request
+    wire  [7:0] sd_buff_din[1];
+    wire        sd_rd_w, sd_wr_w, sd_ack_w;
+    wire  [8:0] sd_buff_addr;
+    wire  [7:0] sd_buff_dout;
+    wire        sd_buff_wr;
+    wire        img_mounted;
+    wire [63:0] img_size;
 
     // hps_io runs at 100 MHz.  At 8 MHz the FPGA->HPS readout direction
     // undersamples the HPS bus strobes; every working MiSTer core runs this
@@ -167,9 +178,15 @@ module emu
         .ioctl_wait        (ioctl_wait),
         .sd_lba            (sd_lba),
         .sd_blk_cnt        (sd_blk_cnt),
-        .sd_rd             (1'b0),
-        .sd_wr             (1'b0),
-        .sd_buff_din       (sd_buff_din)
+        .sd_rd             (sd_rd_w),
+        .sd_wr             (sd_wr_w),
+        .sd_ack            (sd_ack_w),
+        .sd_buff_addr      (sd_buff_addr),
+        .sd_buff_dout      (sd_buff_dout),
+        .sd_buff_din       (sd_buff_din),
+        .sd_buff_wr        (sd_buff_wr),
+        .img_mounted       (img_mounted),
+        .img_size          (img_size)
     );
 
     // ---- image download ----------------------------------------------------
@@ -198,6 +215,19 @@ module emu
 
     wire bank0_ld_busy, sdram_ld_busy;
     assign ioctl_wait = bank0_ld_busy | sdram_ld_busy;
+
+    // ---- SD block device ---------------------------------------------------
+    // Shares the loader write ports with the ioctl downloader.  They can never
+    // be active together: dl_hold holds the CPU in reset for the whole
+    // download, so no program is running to issue an SD command.
+    wire        sd_busy;
+    wire  [7:0] sd_reg_data;
+    wire        sd_reg_sel;
+    wire        sd_dma_wr;
+    wire [23:0] sd_dma_addr;
+    wire  [7:0] sd_dma_data;
+    wire        sd_dma_to_bank0 = (sd_dma_addr[23:16] == 8'h00);
+
 
     // ========================================================================
     // CPU
@@ -312,9 +342,41 @@ module emu
     end
     assign rom_overlay_en = sysctl_overlay;
 
+    // $9F80 is SYSCTL proper; $9F81-$9F8A belong to the SD block device.
     wire [7:0] sysctl_data = (cpu_a[3:0] == 4'h0)
                            ? {6'b0, cpu_emu_mode, sysctl_overlay}
-                           : 8'h00;
+                           : sd_reg_sel ? sd_reg_data
+                                        : 8'h00;
+
+    sd_block u_sd (
+        .clk          (cpu_clk),
+        .reset_n      (cpu_reset_n),
+        .cs           (sysctl_cs),
+        .we           (~cpu_rwn),
+        .addr         (cpu_a[3:0]),
+        .wr_data      (cpu_do),
+        .rd_data      (sd_reg_data),
+        .rd_sel       (sd_reg_sel),
+        .busy         (sd_busy),
+
+        .sdram_clk    (sdram_clk),
+        .sd_lba       (sd_lba[0]),
+        .sd_rd        (sd_rd_w),
+        .sd_wr        (sd_wr_w),
+        .sd_ack       (sd_ack_w),
+        .sd_buff_addr (sd_buff_addr),
+        .sd_buff_dout (sd_buff_dout),
+        .sd_buff_din  (sd_buff_din[0]),
+        .sd_buff_wr   (sd_buff_wr),
+        .img_mounted  (img_mounted),
+        .img_size     (img_size),
+
+        .dma_wr       (sd_dma_wr),
+        .dma_addr     (sd_dma_addr),
+        .dma_data     (sd_dma_data),
+        .dma_busy     (bank0_ld_busy | sdram_ld_busy)
+    );
+
 
     // ========================================================================
     // Memory
@@ -330,9 +392,9 @@ module emu
         .wr_data (cpu_do),
         .rd_data (bank0_data),
         .ld_clk  (sdram_clk),
-        .ld_wr   (dl_wr &  dl_to_bank0),
-        .ld_addr (dl_addr[15:0]),
-        .ld_data (ioctl_dout),
+        .ld_wr   ((dl_wr &  dl_to_bank0) | (sd_dma_wr &  sd_dma_to_bank0)),
+        .ld_addr (sd_dma_wr ? sd_dma_addr[15:0] : dl_addr[15:0]),
+        .ld_data (sd_dma_wr ? sd_dma_data       : ioctl_dout),
         .ld_busy (bank0_ld_busy)
     );
 
@@ -353,9 +415,9 @@ module emu
         .ready      (sdram_ready),
 
         .sdram_clk  (sdram_clk),
-        .ld_wr      (dl_wr & ~dl_to_bank0),
-        .ld_addr    (dl_addr),
-        .ld_data    (ioctl_dout),
+        .ld_wr      ((dl_wr & ~dl_to_bank0) | (sd_dma_wr & ~sd_dma_to_bank0)),
+        .ld_addr    (sd_dma_wr ? sd_dma_addr : dl_addr),
+        .ld_data    (sd_dma_wr ? sd_dma_data : ioctl_dout),
         .ld_busy    (sdram_ld_busy),
 
         .SDRAM_A    (SDRAM_A),
@@ -428,7 +490,11 @@ module emu
 
     // Global stall.  flat_sdram.ready idles high when unselected, so a plain
     // AND combines the VERA read stall with the SDRAM access stall.
-    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd2)) & sdram_ready;
+    // sd_busy freezes the CPU for the whole SD transfer.  That is what makes
+    // the DMA safe without arbitration -- the CPU issues no memory access
+    // while it runs -- and it is why software never has to poll: the
+    // instruction after the command write executes once the transfer is done.
+    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd2)) & sdram_ready & ~sd_busy;
 
     wire [4:0] vera_a_out = vera_access ? cpu_a[4:0] : cpu_a5_q1;
     wire [7:0] vera_d_out = vera_write    ? cpu_do    :

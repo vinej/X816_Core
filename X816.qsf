@@ -236,6 +236,7 @@ set_global_assignment -name SDC_FILE x816.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bank0_ram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/boot_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/flat_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sd_block.sv
 set_global_assignment -name VERILOG_FILE rtl/sdram.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via65c22.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/smc_x16.sv

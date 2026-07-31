@@ -54,3 +54,6 @@ boot/hello.bin
 boot/mini.*
 boot/kbd.o
 boot/kbd.bin
+
+# Quartus compile log left by an interactive build
+c5.log
