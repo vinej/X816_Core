@@ -165,3 +165,8 @@ kernel/library boundary by rule rather than case by case, states the flat
 24-bit API and the bank `$00` budget it may claim, and records why there is no
 X16 compatibility shim — it would have covered barely half the calls in the
 modules that still needed it, so those get converted instead.
+
+[doc/DUREXFORTH.md](doc/DUREXFORTH.md) — **planned.** Porting durexForth (MIT)
+to give the machine an interactive prompt: 32-bit cells, the two-plane stack
+widened from bytes to words, and what converts mechanically versus what needs
+hand work in the native-code generator. Waits on the kernel console.
