@@ -78,7 +78,8 @@ inspection. The rule only has to decide the other 19:
 | `input/keyboard` (buffer), `comms/i2c` | **kernel** | the SMC I²C bus is shared with the keyboard |
 | `gfx/console` | **kernel** | owns the prompt's screen when no program has taken it |
 | `storage/bmx` | library | a *format* parser; its 36 KERNAL calls are all "give me the next byte" |
-| `gfx/fb`, `gfx/graph`, `video/screen` | library | drawing; touch the KERNAL only to set a mode |
+| `gfx/fb`, `gfx/graph` | library | thin wrappers over the X16's ROM graphics — retargeted onto the library's own primitives, §6 |
+| `video/screen` | library | mode setting |
 | `ui/filepick`, `input/mouse`, `input/input` | library | per-program UI and polling |
 | `storage/iec` | **dropped** | there is no IEC bus on X816 |
 
@@ -99,8 +100,9 @@ out 24-bit addresses.
 | `$F0:0000-$FF:FFFF` | kernel code and constant tables — the firmware region, HPS-loaded, write-protected |
 | `$00:2000-$00:2FFF` | kernel state and its direct page |
 | `$00:FE00-$00:FEFF` | native jump table — 64 entries × 4 bytes |
-| `$00:FF00-$00:FFE3` | X16 compatibility jump table (§6) |
 | `$00:FFE4-$00:FFFF` | 65C816 vectors — hardware, not ours to place |
+
+`$00:FF00-$00:FFE3` is deliberately **not** claimed; see §6.
 
 **Buffers go in SDRAM, not bank `$00`.** FAT32 wants a 512-byte sector buffer
 per open file plus a FAT cache; that is exactly the kind of thing that would
@@ -124,7 +126,9 @@ Bank `$00` is 64 KB, permanently, and is the scarce resource
 | `$9E00` | guard page — never allocate as a direct page |
 | `$9F00-$9FFF` | I/O |
 | `$A000-$FDFF` | application |
-| `$FE00-$FFFF` | **kernel** — jump tables and vectors |
+| `$FE00-$FEFF` | **kernel** — native jump table |
+| `$FF00-$FFE3` | application — freed by dropping the X16 shim (§6) |
+| `$FFE4-$FFFF` | CPU vectors |
 
 The kernel gets **4 KB plus two pages**. If it needs more than that, the design
 is wrong; move it into the firmware region or into an SDRAM buffer.
@@ -238,30 +242,55 @@ Flat 24-bit addresses. There is no banking API because there is no banking.
 
 ---
 
-## 6. X16 compatibility shim
+## 6. No X16 compatibility shim
 
-Eleven calls, at their X16 addresses, mapped onto §5:
+An earlier draft of this document specified one: eleven CBM calls (`SETLFS`,
+`SETNAM`, `OPEN`, `CLOSE`, `CHKIN`, `CHKOUT`, `CLRCHN`, `CHRIN`, `CHROUT`,
+`READST`, `GETIN`) at their X16 addresses in the vector page, mapped onto §5.
+**That was wrong, and the numbers say so.**
 
-```
-SETLFS $FFBA   SETNAM $FFBD   OPEN   $FFC0   CLOSE  $FFC3
-CHKIN  $FFC6   CHKOUT $FFC9   CLRCHN $FFCC   CHRIN  $FFCF
-CHROUT $FFD2   READST $FFB7   GETIN  $FFE4
-```
+Count what a shim would actually still be serving. The 19 KERNAL-dependent
+x16lib modules split into the twelve that §2.3 moves *into* the kernel — those
+get rewritten and need no shim — and seven that stay library. Across those
+seven there are 104 KERNAL call sites, and the eleven-call shim covers **54**.
+The other **50** are the X16's ROM graphics library (`FB_*`, `GRAPH_*`),
+`MOUSE_*`, `JOYSTICK_*`, `SCREEN_MODE`, `PLOT` and PETSCII.
 
-Those eleven account for roughly half of all KERNAL call sites in x16lib, which
-is why the shim is worth having: it keeps the 19 KERNAL-dependent modules
-working and keeps porting X16 software easy — the reason the core runs at
-8 MHz in the first place.
+So every one of those modules has to be converted anyway. A shim would only
+shrink the diff inside files already being edited, in exchange for a permanent
+cost: 228 bytes of the vector page, a stateful CBM channel model (logical file
+numbers, device and secondary addresses, a global "current channel") leaking
+into a handle-based kernel, an ABI frozen forever, and two ways to do
+everything for library modules to disagree about.
 
-**The shim is a compatibility layer, not the foundation.** It is implemented on
-top of §5, never the reverse. It runs in 8-bit mode as its callers expect, and
-converts. Anything it cannot express — a file above bank `$00`, an offset past
-64 KB — is a failure the caller sees, not something the native API is bent to
-accommodate.
+Nor does it buy much outside the library. Porting an X16 *application* means a
+new load address and image format, no banked RAM at `$A000`, no ROM at
+`$C000`, PETSCII to ASCII, and native-mode direct-page arithmetic that wraps
+within the bank rather than within the page. Against all that, the I/O calls
+are a small share of the work.
 
-Explicitly **not** provided: IEC (`LISTEN`, `TALK`, `SECOND`, `TKSA`), because
-there is no serial bus; the banking calls, because there is no banking; and
-`MEMORY_COPY`, because a flat machine's block move is `MVN`.
+**What replaces it.** X816_Library is converted to call §5 directly. The
+conversion is cheaper than it looks, because most of the 50 uncovered calls do
+not want a kernel at all:
+
+| Calls | Retargeted onto |
+|---|---|
+| file and console (54) | §5.1 and §5.2 |
+| `FB_*`, `GRAPH_*` (≈35) | the library's own primitives — `bitmap2h/4l/8h`, `shapes` already implement line, rect, circle, pset, fill, blit and char in software |
+| `MOUSE_*`, `JOYSTICK_*` (≈12) | the hardware directly, as library code |
+| `SCREEN_MODE`, `PLOT`, PETSCII (≈10) | `video/screen`, as library code |
+
+`gfx/graph` and `gfx/fb` are thin wrappers over the X16's ROM graphics; on
+X816 they point at code the library already contains. Test 2 of §2.1 says
+graphics primitives are library, so routing them through a kernel would have
+been the wrong answer regardless of the shim question.
+
+If X16 porting help is wanted later, the right shape is **source-level macros**
+in the library — `+chrout` expanding to a native call — not a runtime jump
+table. Zero runtime cost, no bank `$00` claim, and no ABI commitment.
+
+Consequently `$00:FF00-$00:FFE3` is **not** reserved; only the CPU vectors at
+`$00:FFE4-$00:FFFF` are.
 
 ---
 
@@ -291,14 +320,13 @@ screen means pass, one colour per failing test, and a result byte for a
 debugger. Both the emulator and the hardware must pass before anything is built
 on the kernel.
 
-1. Jump tables present and every entry reaching its handler
+1. Jump table present and every entry reaching its handler
 2. `D` and `DBR` preserved across every call
 3. Carry-set/`C`-error reported for a bad handle, a missing path, a full disk
 4. Read back what was written, across a sector boundary and past 64 KB
 5. Directory enumeration terminating exactly once at the end
 6. `EXEC` of a known image landing at its entry point
 7. `MEM_ALLOC`/`MEM_FREE` returning distinct non-overlapping ranges
-8. Shim: `CHROUT` reaching the console and `CHRIN` reading a file
 
 **A test that cannot fail proves nothing** — each one needs its negative
 control, as `run-emu.sh --negative` does in X816_Calypsi.
@@ -314,4 +342,5 @@ The console and file management both stand on FAT32, so:
 2. FAT32 read, then write
 3. Native API §5, and its tests
 4. Console and prompt
-5. The §6 shim, once there is something for it to sit on
+5. Convert X816_Library to §5 (§6) — file and console calls first, then
+   retarget `gfx/fb` and `gfx/graph` onto the library's own primitives

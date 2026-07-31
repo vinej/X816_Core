@@ -162,5 +162,6 @@ not wired yet, and the known performance ceiling with the two fixes for it.
 [doc/KERNEL.md](doc/KERNEL.md) — **planned.** The small OS: console, filesystem
 and program loading. Written before the code, as VERA816.md was. Decides the
 kernel/library boundary by rule rather than case by case, states the flat
-24-bit API and the bank `$00` budget it may claim, and keeps eleven X16 KERNAL
-calls as a compatibility shim on top — never as the foundation.
+24-bit API and the bank `$00` budget it may claim, and records why there is no
+X16 compatibility shim — it would have covered barely half the calls in the
+modules that still needed it, so those get converted instead.
