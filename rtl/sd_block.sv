@@ -247,6 +247,22 @@ module sd_block (
     // 512-byte block buffer -- true dual port, A = cpu_clk, B = sdram_clk.
     // The two sides never touch it at the same time: the CPU fills or drains
     // it only while idle, the HPS and the DMA only while busy.
+    //
+    // THE WRITE-FIRST SHAPE BELOW IS MANDATORY, NOT A PREFERENCE.
+    //
+    // Both ports must be written as "on a write, forward the written byte to
+    // the output; otherwise read memory" -- Altera's true-dual-port template.
+    // The obvious alternative, an unconditional read alongside the write,
+    // asks for READ-OLD-DATA behaviour, and a Cyclone V M10K in true dual
+    // port mode with TWO CLOCKS cannot do that. Quartus does not explain
+    // itself; it just refuses:
+    //
+    //   Error (276001): Cannot synthesize dual-port RAM logic
+    //                   "emu:emu|sd_block:u_sd|blkbuf"
+    //
+    // Forwarding costs nothing here. Port A only ever reads back a byte the
+    // CPU wrote at the previous pointer, and port B's output is unused during
+    // an HPS write.
     // ------------------------------------------------------------------
     (* ramstyle = "M10K" *) logic [7:0] blkbuf [0:511];
 
@@ -256,13 +272,21 @@ module sd_block (
     logic [7:0] buf_b_q;
 
     always_ff @(posedge clk) begin
-        if (buf_a_we) blkbuf[bufptr] <= wr_data;
-        buf_a_q <= blkbuf[bufptr];
+        if (buf_a_we) begin
+            blkbuf[bufptr] <= wr_data;
+            buf_a_q        <= wr_data;
+        end else begin
+            buf_a_q        <= blkbuf[bufptr];
+        end
     end
 
     always_ff @(posedge sdram_clk) begin
-        if (buf_b_we) blkbuf[buf_b_addr] <= buf_b_din;
-        buf_b_q <= blkbuf[buf_b_addr];
+        if (buf_b_we) begin
+            blkbuf[buf_b_addr] <= buf_b_din;
+            buf_b_q            <= buf_b_din;
+        end else begin
+            buf_b_q            <= blkbuf[buf_b_addr];
+        end
     end
 
     // ------------------------------------------------------------------
