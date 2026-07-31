@@ -96,7 +96,7 @@ module bank0_ram (
         end
     end
 
-    // ---- cpu_clk side: see the req flip, commit the byte, flip ack ----
+    // ----- cpu_clk side: see the req flip, commit the byte, flip ack ----
     logic       ack_tgl = 1'b0;
     logic [1:0] req_s   = 2'b00;
     logic       req_d   = 1'b0;

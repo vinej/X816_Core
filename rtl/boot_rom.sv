@@ -26,7 +26,7 @@
 // download path can overwrite bank 0 at runtime for everything beyond the stub.
 //
 // Same negedge-read convention as bank0_ram.sv so the two mux cleanly.
-//============================================================================
+// ============================================================================
 module boot_rom (
     input  logic       clk,
     input  logic [7:0] addr,        // offset within $FF00-$FFFF

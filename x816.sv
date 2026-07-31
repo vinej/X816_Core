@@ -342,10 +342,18 @@ module emu
     end
     assign rom_overlay_en = sysctl_overlay;
 
-    // $9F80 is SYSCTL proper; $9F81-$9F8A belong to the SD block device.
+    // Keyboard diagnostic counters, driven far below where the PS/2 sync lives
+    // but declared here because the read mux just underneath uses them.
+    reg [7:0] dbg_arrive_r, dbg_push_r, dbg_drop_r;
+
+    // $9F80 is SYSCTL proper; $9F81-$9F8C belong to the SD block device, and
+    // $9F8D-$9F8F are the keyboard diagnostic counters.
     wire [7:0] sysctl_data = (cpu_a[3:0] == 4'h0)
                            ? {6'b0, cpu_emu_mode, sysctl_overlay}
                            : sd_reg_sel ? sd_reg_data
+                           : (cpu_a[3:0] == 4'hD) ? dbg_arrive_r
+                           : (cpu_a[3:0] == 4'hE) ? dbg_push_r
+                           : (cpu_a[3:0] == 4'hF) ? dbg_drop_r
                                         : 8'h00;
 
     sd_block u_sd (
@@ -796,16 +804,80 @@ module emu
     wire       smc_uart_byte_valid;
 
     // ps2_key/ps2_mouse originate in the 100 MHz domain.  Bit [10] / bit [24]
-    // is a toggle marking each new event and the payload is held stable between
-    // events (milliseconds apart), so a plain vector 2-FF sync is safe.
-    reg [10:0] ps2_key_s1, ps2_key_s2;
+    // is a toggle marking each new event and the payload changes WITH it.
+    //
+    // This used to be a plain 11-bit vector 2-FF sync, justified on the grounds
+    // that the payload is stable between events (milliseconds apart).  That
+    // reasoning is wrong, and the bug it hides is exactly the reported one:
+    // keys that are typed but never arrive.  The hazard is not the gap BETWEEN
+    // events, it is the instant of the transition.  Every bit crosses at once
+    // and each resolves independently, so the destination can latch the NEW
+    // toggle beside a STALE `pressed` bit -- a make recorded as a break, or a
+    // break as a make.  A lost make is a keystroke that never happened; a
+    // spurious break explains a RELEASE count running ahead of PRESS, which is
+    // what the hardware measurement showed (20 presses against 22 releases).
+    //
+    // The correct pattern is to synchronise the FLAG alone and read the DATA
+    // only once the flag has been seen, by which point the payload has been
+    // settled for milliseconds.  Two extra clocks is enormous margin at 8 MHz.
+    reg        ktog_s1, ktog_s2, ktog_s3;
+    reg  [9:0] kpay_r;
+    reg        kout_tog;
+    reg  [1:0] kdelay;
+    always @(posedge cpu_clk or negedge cpu_reset_n) begin
+        if (!cpu_reset_n) begin
+            ktog_s1 <= 1'b0; ktog_s2 <= 1'b0; ktog_s3 <= 1'b0;
+            kpay_r  <= 10'd0; kout_tog <= 1'b0; kdelay <= 2'd0;
+        end else begin
+            ktog_s1 <= ps2_key[10];
+            ktog_s2 <= ktog_s1;
+            ktog_s3 <= ktog_s2;
+            if (kdelay != 2'd0) begin
+                kdelay <= kdelay - 2'd1;
+                if (kdelay == 2'd1) begin
+                    // Settled: read the payload straight from the source, the
+                    // standard flag-then-data handshake.
+                    kpay_r   <= ps2_key[9:0];
+                    kout_tog <= ~kout_tog;
+                end
+            end else if (ktog_s2 != ktog_s3) begin
+                kdelay <= 2'd2;
+            end
+        end
+    end
+    wire [10:0] ps2_key_s2 = {kout_tog, kpay_r};
+
+    // The mouse path has the SAME hazard and is deliberately left alone: it is
+    // not implicated in the reported fault, and there is no way to test a
+    // change to it here.  If the mouse ever reports phantom buttons or stuck
+    // movement, this is the first place to look.
     reg [24:0] ps2_mouse_s1, ps2_mouse_s2;
     reg  [7:0] ps2_mwheel_s1, ps2_mwheel_s2;
     always @(posedge cpu_clk) begin
-        ps2_key_s1    <= ps2_key;        ps2_key_s2    <= ps2_key_s1;
         ps2_mouse_s1  <= ps2_mouse;      ps2_mouse_s2  <= ps2_mouse_s1;
         ps2_mwheel_s1 <= ps2_mouse_ext[7:0];
         ps2_mwheel_s2 <= ps2_mwheel_s1;
+    end
+
+    // ---- keyboard diagnostic counters, readable at $9F8D-$9F8F -------------
+    // Three stages, three counters, so one hardware run says where a keystroke
+    // died instead of another round of reasoning:
+    //   $9F8D  makes that crossed into the core at all   (this sync)
+    //   $9F8E  makes that reached the SMC key FIFO       (translation + space)
+    //   $9F8F  keys dropped because the FIFO was full
+    // Compare against what was typed, in that order; the first one that falls
+    // short is the guilty stage.  Free-running 8-bit, wrapping, cleared only by
+    // reset -- software reads them twice and subtracts.
+    wire      smc_key_push, smc_key_drop;
+    wire      kbd_arrive_make = (kdelay == 2'd1) & ps2_key[9];
+    always @(posedge cpu_clk or negedge cpu_reset_n) begin
+        if (!cpu_reset_n) begin
+            dbg_arrive_r <= 8'h00; dbg_push_r <= 8'h00; dbg_drop_r <= 8'h00;
+        end else begin
+            if (kbd_arrive_make) dbg_arrive_r <= dbg_arrive_r + 8'd1;
+            if (smc_key_push)    dbg_push_r   <= dbg_push_r   + 8'd1;
+            if (smc_key_drop)    dbg_drop_r   <= dbg_drop_r   + 8'd1;
+        end
     end
 
     ps2_to_smc_bridge u_ps2_bridge (
@@ -831,6 +903,8 @@ module emu
         .nmi_req         (smc_nmi_req),
         .act_led_r       (smc_act_led),
         .dbg_kbd_count   (),
+        .dbg_key_push    (smc_key_push),
+        .dbg_key_drop    (smc_key_drop),
         .dbg_saw_start   (),
         .dbg_saw_addr_match(),
         .dbg_saw_byte    (),

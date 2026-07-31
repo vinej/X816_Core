@@ -61,3 +61,11 @@ c5.log
 # Conformance-test disk images: regenerate with boot/mksdtest.py and
 # boot/mkfat32.py rather than carrying 64 MB in the repository.
 boot/*.img
+
+# Assembler output from boot/build.sh. These were listed one file at a time and
+# the list has already fallen behind once -- boot/sdtest.o was tracked as
+# untracked noise because nobody remembered to add it. Only boot/boot.o is
+# exempt: boot.hex is committed so the bitstream builds without cc65, and its
+# .o is regenerable, so it stays ignored too.
+boot/*.o
+boot/*.lst

@@ -69,6 +69,24 @@ HPS. Cross-compiling from a PC is the intended workflow regardless.
 Also in each release: `Calypsi65816Guide.pdf` (the reference) and
 `ReleaseNotes-65816.md`.
 
+### Where it lives for this project
+
+Unpack it into the repository that uses it:
+
+```
+X816_Calypsi/Calypsi/calypsi-65816-5.18/
+```
+
+Every `Makefile` and `run-*.sh` under `X816_Calypsi/examples/` defaults to that
+relative path, so a clean checkout plus an unpacked toolchain builds with no
+configuration. Setting `CALYPSI` in the environment still overrides it.
+
+`Calypsi/` is in `.gitignore` and **must stay there** — the toolchain is closed
+source and redistribution is not permitted (§1). Keeping it inside the repo is
+about not losing it, not about shipping it: it was previously only in a
+temporary scratch directory, which looks exactly like an uninstalled toolchain
+the moment that directory is cleaned up.
+
 ### Tools
 
 | Tool | Purpose |

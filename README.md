@@ -47,11 +47,21 @@ sh boot/build.sh vramtest              # boot.hex <- the VERA816 conformance tes
 `boot/boot.hex` is committed, so the bitstream builds with no toolchain
 installed.
 
-Copy the result to `/media/fat/_Computer/` on the MiSTer SD card and **keep
-MiSTer's `<Name>_<date>.rbf` naming convention** — e.g. `X816_20260730.rbf`.
-A file that does not follow the pattern can misbehave in the launcher in ways
-that look exactly like a broken bitstream (black screen, unresponsive board).
-That cost an afternoon of RTL debugging here.
+Then package it for the MiSTer SD card:
+
+```sh
+sh tools/mkrelease.sh                  # -> releases/mister/, copy onto /media/fat/
+```
+
+That builds the core, the shell and a starter SD card image into a tree that
+maps 1:1 onto the card — see **[doc/MISTER.md](doc/MISTER.md)** for installing
+and first run.
+
+It also handles the `.rbf` naming for you. **MiSTer's `<Name>_<date>.rbf`
+convention is load-bearing**: a file that does not follow the pattern can
+misbehave in the launcher in ways that look exactly like a broken bitstream
+(black screen, unresponsive board). That cost an afternoon of RTL debugging
+here, so the name is now derived from the bitstream rather than typed by hand.
 
 ## What it does today
 

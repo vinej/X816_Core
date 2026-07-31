@@ -100,6 +100,11 @@ module smc_x16 #(
 
     // Debug: keyboard FIFO occupancy (0..16) so the LEDR can show it.
     output logic [4:0] dbg_kbd_count,
+    // 1-cycle strobes for the keyboard diagnostic registers at
+    // $9F8E/$9F8F.  A key that is typed but never appears has to be
+    // lost at exactly one stage, and these say which.
+    output logic       dbg_key_push,   // a MAKE entered the key FIFO
+    output logic       dbg_key_drop,   // a key was dropped: FIFO full
 
     // Debug: sticky bits exposing I2C activity for board-LED debug.
     //   dbg_saw_start       any START condition observed
@@ -539,6 +544,8 @@ module smc_x16 #(
     end
 
     assign dbg_kbd_count = kfifo_count;
+    assign dbg_key_push  = push_key & ~kfifo_full & ~is_release;
+    assign dbg_key_drop  = push_key &  kfifo_full;
     assign dbg_kbd_pop   = kbd_pop;
     assign dbg_tx_byte   = tx_byte_pre;
 
@@ -676,6 +683,18 @@ module smc_x16 #(
     // Latched tx_shift updated on entry to S_TX_BYTE (so a single byte's
     // serialization doesn't see a mid-stream change).
     logic [7:0] tx_shift;
+    // Did the byte now being shifted out actually COME from the key FIFO?
+    //
+    // This exists because testing kfifo_empty at ACK time is a race, and that
+    // race silently ate keystrokes.  The byte is captured in S_ADDR_ACK but the
+    // pop was decided nine bit-times later in S_TX_ACK, re-reading kfifo_empty.
+    // If the FIFO was empty at capture (so $00 went out) and a key arrived
+    // during those nine bits, the pop fired anyway and discarded an entry the
+    // master had never received.  Measured on hardware: 20 keys in, 20 pushed,
+    // 0 dropped for fullness, and only 17 read back.
+    //
+    // Remembering what was actually SENT removes the race entirely.
+    logic       tx_from_kfifo;
 
     // Compute the byte that will be served NEXT (after the current ACK
     // commits the pop).  Mirrors the increment logic in S_TX_ACK so the
@@ -741,6 +760,7 @@ module smc_x16 #(
             kbd_status_r    <= 8'hFA;        // pretend last command OK
             sda_drive_low   <= 1'b0;
             tx_shift        <= 8'h00;
+            tx_from_kfifo   <= 1'b0;
             kbd_pop         <= 1'b0;
             mouse_pop       <= 1'b0;
             power_off_req   <= 1'b0;
@@ -846,6 +866,8 @@ module smc_x16 #(
                             // remaining 7 bits in order.
                             sda_drive_low <= ~tx_byte_pre[7];
                             tx_shift      <= {tx_byte_pre[6:0], 1'b0};
+                            // Latched WITH the byte, not re-derived later.
+                            tx_from_kfifo <= ~kfifo_empty;
                             bitcnt        <= 4'h1;   // 1 bit driven here
                             did_read      <= 1'b1;   // consume pending cmd at boundary
                             sstate        <= S_TX_BYTE;
@@ -946,7 +968,8 @@ module smc_x16 #(
                         case (eff_cmd)
                             CMD_GET_KEYCODE,
                             CMD_GET_KEYCODE_FAST: begin
-                                if (!kfifo_empty) kbd_pop <= 1'b1;
+                                // NOT !kfifo_empty: see tx_from_kfifo above.
+                                if (tx_from_kfifo) kbd_pop <= 1'b1;
                             end
                             CMD_GET_MOUSE_MOV,
                             CMD_GET_MOUSE_MOV_FAST: begin
@@ -959,7 +982,7 @@ module smc_x16 #(
                             end
                             CMD_GET_PS2DATA_FAST: begin
                                 if (ps2_rd_phase == 3'd0) begin
-                                    if (!kfifo_empty) kbd_pop <= 1'b1;
+                                    if (tx_from_kfifo) kbd_pop <= 1'b1;
                                     ps2_rd_phase <= 3'd1;
                                 end else if (ps2_rd_phase == 3'd4) begin
                                     if (mouse_has_pkt) mouse_pop <= 1'b1;
@@ -973,7 +996,11 @@ module smc_x16 #(
 
                         if (sda_q == 1'b0) begin
                             // ACK -> prepare next byte for back-to-back read.
-                            tx_shift <= tx_byte_next;
+                            // tx_byte_next is filler $00 for the keycode
+                            // commands, so the follow-on byte is not a FIFO
+                            // entry and must not pop one either.
+                            tx_shift      <= tx_byte_next;
+                            tx_from_kfifo <= 1'b0;
                             bitcnt   <= 4'h0;
                             sstate   <= S_TX_BYTE;
                         end else begin
