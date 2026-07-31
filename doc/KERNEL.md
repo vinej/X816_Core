@@ -337,9 +337,10 @@ control, as `run-emu.sh --negative` does in X816_Calypsi.
 
 The console and file management both stand on FAT32, so:
 
-1. **SD card** — done: `rtl/sd_block.sv`, a DMA block device rather than the
-   X16's SPI emulation (see [MEMORY_MAP.md](MEMORY_MAP.md)), with
-   `boot/sdtest.s` green in the emulator
+1. **SD card** — **done and green on hardware**: `rtl/sd_block.sv`, a DMA
+   block device rather than the X16's SPI emulation (see
+   [MEMORY_MAP.md](MEMORY_MAP.md)), with `boot/sdtest.s` green on a DE10-Nano
+   and in the emulator
 2. FAT32 read, then write
 3. Native API §5, and its tests
 4. Console, then the prompt — [SHELL.md](SHELL.md)

@@ -104,7 +104,34 @@ Two things about the SMC that cost real time and are not obvious:
   in `rtl/smc_x16.sv`; `boot/kbd.s` carries the inverse, extracted from it
   rather than guessed.
 
-Not yet exercised on hardware: audio and the SD card.
+**The SD card works.** `boot/sdtest.bin` comes up green on a DE10-Nano, with
+`boot/sdtest.img` mounted from the OSD. That covers card presence, a block
+into the device buffer, a DMA read straight into memory, a multi-block read
+advancing both LBA and destination, a write read back, and a read past the end
+of the image reporting an error.
+
+It is a DMA block device (`rtl/sd_block.sv`), not the X16's SPI emulation --
+the CPU writes an LBA, a 24-bit destination and a block count, and the
+hardware moves the data. See [doc/MEMORY_MAP.md](doc/MEMORY_MAP.md).
+
+Three things cost a rebuild each, and are worth knowing before touching that
+module:
+
+* Quartus will not infer a true dual-port RAM across two clocks on this part,
+  whichever template you use. `rtl/bank0_ram.sv` already says why in its
+  header; the buffer ended up the same shape -- one clock, writers muxed onto
+  one port, the other dedicated to reads.
+* A registered RAM read needs its address presented a full state early. The
+  first version consumed the read output in the same cycle it set the index,
+  so every byte after the first repeated its predecessor.
+* `hps_io` has no error line, so the device could not fail until it
+  bounds-checked requests against `img_size` itself.
+
+**None of those three are visible in the emulator**, which models no read
+pipeline and no fitter. Emulator-green proves the register contract, not the
+timing.
+
+Not yet exercised on hardware: audio.
 
 ## Running a program
 
