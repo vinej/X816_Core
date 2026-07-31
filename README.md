@@ -131,6 +131,17 @@ module:
 pipeline and no fitter. Emulator-green proves the register contract, not the
 timing.
 
+**FAT32 reads work too.** `examples/fat32/fstest.bin` in X816_Calypsi is green
+on the same board, with `boot/fat32.img` mounted: mount, geometry, a file in
+the root, a file in a subdirectory, a 40-cluster file read in 600-byte bites
+that straddle every sector and cluster boundary, and a missing file correctly
+failing. The image is built by `boot/mkfat32.py` with pyfatfs and verified
+with 7-Zip, so that is interoperation with an independent FAT32
+implementation, not agreement with our own writer.
+
+So the storage stack is proven end to end on hardware, and the emulator agrees
+with the board on every test.
+
 Not yet exercised on hardware: audio.
 
 ## Running a program

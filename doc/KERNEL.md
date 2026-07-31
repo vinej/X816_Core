@@ -341,7 +341,8 @@ The console and file management both stand on FAT32, so:
    block device rather than the X16's SPI emulation (see
    [MEMORY_MAP.md](MEMORY_MAP.md)), with `boot/sdtest.s` green on a DE10-Nano
    and in the emulator
-2. FAT32 read, then write
+2. FAT32 read **done and green on hardware** — `runtime/fat32.c` in
+   X816_Calypsi, with `examples/fat32` green on a DE10-Nano. Write is next.
 3. Native API §5, and its tests
 4. Console, then the prompt — [SHELL.md](SHELL.md)
 5. Convert X816_Library to §5 (§6) — file and console calls first, then
