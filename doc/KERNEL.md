@@ -342,6 +342,6 @@ The console and file management both stand on FAT32, so:
    `boot/sdtest.s` green in the emulator
 2. FAT32 read, then write
 3. Native API §5, and its tests
-4. Console and prompt
+4. Console, then the prompt — [SHELL.md](SHELL.md)
 5. Convert X816_Library to §5 (§6) — file and console calls first, then
    retarget `gfx/fb` and `gfx/graph` onto the library's own primitives

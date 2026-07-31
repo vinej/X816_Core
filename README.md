@@ -166,7 +166,13 @@ kernel/library boundary by rule rather than case by case, states the flat
 X16 compatibility shim — it would have covered barely half the calls in the
 modules that still needed it, so those get converted instead.
 
+[doc/SHELL.md](doc/SHELL.md) — **planned.** The boot prompt: a fixed command
+set over the kernel's console and filesystem, plus memory commands, because a
+bare machine has no monitor. Records why a shell rather than a language, and
+keeps its command table as the extension point a scripting layer would reuse.
+
 [doc/DUREXFORTH.md](doc/DUREXFORTH.md) — **planned.** Porting durexForth (MIT)
 to give the machine an interactive prompt: 32-bit cells, the two-plane stack
 widened from bytes to words, and what converts mechanically versus what needs
-hand work in the native-code generator. Waits on the kernel console.
+hand work in the native-code generator. A separate loadable program, not the
+shell — see SHELL.md §7. Waits on the kernel console.
