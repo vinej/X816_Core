@@ -122,7 +122,8 @@ behaviour: nothing on the very first boot, reliable from then on.
 ```
 /README.TXT     the command list
 /NOTES.TXT      the memory map
-/DEMO/          conformance-test images
+/DEMO/GREEN.BIN the smallest possible program: paints the screen green
+/DEMO/          the conformance-test images
 /PROGS/         empty, for your own
 ```
 
@@ -147,7 +148,16 @@ X816
 > LS                   read the card
 > TYPE README.TXT
 > DUMP 01:0000 40      the shell's own image
+> RUN /DEMO/GREEN.BIN  load a program off the card and go
 ```
+
+`run` overwrites the shell with the program, which is the point -- KERNEL.md's
+EXEC does not return. Reset the core to get the prompt back. `load file [addr]`
+puts an image in memory WITHOUT running it, for poking at with `dump`.
+
+GREEN.BIN is the thing to try first if a program will not start: it is 164 bytes
+and touches nothing but VERA, so a green screen means the whole load-and-go path
+works and the fault is in the program.
 
 If keys are dropped or ignored, `games/X816/` also carries `KBDECHO.BIN` and
 `KBDSTAT.BIN` under `/DEMO/`. Load either from the OSD: they count keystrokes at

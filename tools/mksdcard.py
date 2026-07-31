@@ -78,6 +78,9 @@ A LOADED IMAGE STARTS WITH THE MAGIC X816 AND A JUMP AT 01:0004.
 # Demo images worth having on the card. Missing ones are skipped rather than
 # fatal: this script has to work in a checkout that has not built them.
 DEMOS = [
+    # Smallest possible proof that RUN works: paints green, touches nothing
+    # else. First thing to try when a program will not start.
+    ("GREEN.BIN",  os.path.join(CALYPSI, "examples", "shell", "greentest.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),
