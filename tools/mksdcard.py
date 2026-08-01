@@ -72,6 +72,9 @@ TRY:
   RUN KERNTEST.BIN      KERNEL JUMP TABLE -- GREEN IS PASS
   RUN KFSTEST.BIN       KERNEL FILE CALLS -- GREEN IS PASS
   RUN LIBFS.BIN         X16LIB OVER THE KERNEL -- GREEN IS PASS
+  RUN KEYSCAN.BIN       WHAT EVERY KEY SENDS -> /KEYMAP.TXT
+
+ESC RETURNS TO THE SHELL FROM ANY OF THESE.
   DUMP 01:0000 40
 
 THE CARD IS WRITABLE:
@@ -110,6 +113,11 @@ DEMOS = [
     # own directory, and kfstest leaves /KEEP.TXT behind on purpose.
     ("KFSTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "kfstest.bin")),
     ("LIBFS.BIN",   os.path.join(CALYPSI, "examples", "shell", "libfs.bin")),
+    # Asks for every key the 64-entry keymap cannot express -- F-keys, the
+    # arrows, the keypad, the right-hand modifiers -- and writes what the SMC
+    # actually sent to /KEYMAP.TXT. Those codes are DISCARDED before any
+    # program sees them today, so they cannot be found any other way.
+    ("KEYSCAN.BIN", os.path.join(CALYPSI, "examples", "shell", "keyscan.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),
