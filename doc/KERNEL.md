@@ -3,10 +3,11 @@
 A small OS: a console prompt, a filesystem, and program loading. It is what the
 core comes up in when nothing else is loaded.
 
-Rows marked **planned** are not implemented. Nothing in this document is built
-yet — this is the spec, written before the code the way
-[VERA816.md](VERA816.md) was, so the emulator and the firmware can be built
-against the same statement rather than against each other.
+Rows marked **planned** are not implemented. This is the spec, written before
+the code the way [VERA816.md](VERA816.md) was, so the emulator and the firmware
+could be built against the same statement rather than against each other — and
+much of it is built now: §9 carries per-item status (console, SD and FAT32 are
+green on hardware) and §10 records what is built today.
 
 ---
 
@@ -423,8 +424,10 @@ The console and file management both stand on FAT32, so:
 The table exists and is green in the emulator: `runtime/kerntab.s` and
 `runtime/kernel.h` in X816_Calypsi, tested by `examples/shell/kerntest.c`.
 
-**Implemented:** the eight console entries, 0–7, plus `SYS_VERSION` (48),
-returning `$0001`. Everything else is `k_nosys` — carry set, `C` = `KERR_NOSYS`.
+**Implemented:** the eight console entries 0–7, the fifteen filesystem
+entries 16–30, `EXEC` (32, `runtime/kexec.c`) and `EXIT` (33, a guarded
+restart through the firmware entry), plus `SYS_VERSION` (48) returning
+`$0001`. Everything else is `k_nosys` — carry set, `C` = `KERR_NOSYS`.
 All 64 slots are filled, so calling an unimplemented number is a clean refusal
 rather than a jump into whatever bank `$00` happened to contain, and filling a
 slot later is not an ABI break.
@@ -434,13 +437,21 @@ HPS loader only ever writes bank `$01` — bank `$00` comes up as whatever was
 there, so the linker cannot place it. The linker script does reserve the page
 (HiRAM now stops at `$FDFF`) so no `near` object lands on top of it.
 
-**Residency — read this before relying on it.** The kernel today *is* the
-resident shell at `$01:0000`, and `run` loads a program to exactly that address.
-A program started with `run` has already overwritten the code the table points
-at. The table is valid for the resident program and for anything loaded above
-bank `$01`. Moving the kernel into the firmware region per §3 fixes that and
-does not change this interface — which is the point of fixing the interface
-first.
+**Residency — FIXED as of 2026-08-01.** The kernel now ships as a firmware
+image: `runtime/x816-kernel.scm` links the shell into banks `$F0+` (magic at
+`$F0:0000`, entry `$F0:0004`, state and direct page in the §3.1 claim at
+`$2000-$2FFF`), `examples/shell/build.sh` emits it as `kernel.bin`, and
+`tools/mkrelease.sh` ships it as `games/X816/boot2.rom` — HPS-loaded (ioctl
+index `16'h0080`) and **write-protected** by the core (`x816.sv` `fw_region`).
+`boot/boot.s` checks the firmware magic before the `$01:0000` fallback (§7),
+every kernel entry switches to the kernel context and back (`kerntab.s`
+`KENTER`/`KLEAVE`, assembled with `-DKERNEL_RESIDENT`), and `run` erasing
+`$01:0000` no longer touches the code the table points at. Proven in
+simulation (`X816_core/sim/run.sh fw` — firmware branch + write-protect on
+real RTL) and in the emulator (`examples/shell/run-fwboot.sh` — boot to
+prompt from `$F0:0000`, with a corrupted-magic negative control). The
+loadable-shell path stays as boot1.rom fallback, and the interface did not
+change — which was the point of fixing the interface first.
 
 ### 10.1 Calling it from C
 

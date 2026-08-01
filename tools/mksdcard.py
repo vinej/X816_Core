@@ -26,8 +26,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CORE = os.path.dirname(HERE)
 CALYPSI = os.path.join(os.path.dirname(CORE), "X816_Calypsi")
 
-# boot0.img, because MiSTer auto-mounts it into slot 0 when it is present.
-# The name is the mechanism, not decoration -- see doc/MISTER.md.
+# boot0.img is a naming convention only -- there is no bootN.img auto-mount.
+# The core's Mount SD entry is declared SC0, so the user mounts the image once
+# from the OSD and MiSTer Main remembers and re-mounts it at every core start
+# -- see doc/MISTER.md and the CONF_STR comment in x816.sv.
 out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(CORE, "releases",
                                                          "boot0.img")
 os.makedirs(os.path.dirname(out), exist_ok=True)

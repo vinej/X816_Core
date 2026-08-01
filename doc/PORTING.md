@@ -26,9 +26,9 @@ against them — port over unchanged.
 
 | Block | Files | Change |
 |---|---|---|
-| VERA (video, audio, SPI) | 24 | none |
+| VERA (video, audio, SPI) | 24 | **6 files widened** — the VERA816 extension: 352 KB VRAM, 19-bit addresses ([VERA816.md](VERA816.md)) |
 | IKAOPM (YM2151) | 11 | none |
-| VIA 6522, SMC, I²C, PS/2 bridge | 6 | none |
+| VIA 6522, SMC, I²C, PS/2 bridge | 6 | `smc_x16.sv` — key-FIFO pop-race fix (silently ate keystrokes; found on hardware) + debug taps |
 | `sdram.v` (MiST byte controller) | 1 | none |
 | `x16_periph.sv` (snes_pad, i2s_rx) | 1 | none |
 | MiSTer framework `sys/`, PLL IP | all | none |
@@ -148,7 +148,10 @@ Each is a straight lift from `x16_mister` when wanted, in roughly this order:
    `$6F`, backed by a mounted image).
 3. **Serial** — `x16_serial_card.sv` ×2 at `$9FE0`/`$9FE8`.
 4. **SDRAM bitmap layer ("VERA2")** — `bitmap_regs.sv` + `bitmap_engine.sv`,
-   a 1 MB planar framebuffer in SDRAM at word base `FB_BASE_WORD`.
+   a 1 MB planar framebuffer in SDRAM at word base `FB_BASE_WORD`. *Since
+   superseded: the VERA816 widening puts a 640×480 8bpp framebuffer in real
+   VRAM, so VERA2 stops being necessary ([VERA816.md](VERA816.md) §1); the
+   notes below are kept in case it is ever wanted anyway.*
    **Two things must change before it can be ported:**
    * `FB_BASE_WORD = 24'h800000` is a *word* base, which in the flat mapping
      is CPU address `$80:0000` — it would sit inside the flat space and
@@ -158,10 +161,11 @@ Each is a straight lift from `x16_mister` when wanted, in roughly this order:
      the X16 (where the CPU mostly ran out of BRAM and only the HiRAM/cart
      windows hit SDRAM). Measure before enabling.
 
-   Note that VERA's own **128 KB VRAM is unaffected by any of this** — it is
-   M10K inside `vera/fpga/source/main_ram.v` (16 nibble arrays x 16384 =
-   1 Mbit), reachable only through VERA's data port at `$9F23`/`$9F24`, and it
-   is already present and working in this build.
+   Note that VERA's own **VRAM is unaffected by any of this** — it is M10K
+   inside `vera/fpga/source/main_ram.v` (widened by VERA816 from 128 KB to
+   352 KB, 8 nibble arrays × 90,112 words — see [VERA816.md](VERA816.md)),
+   reachable only through VERA's data port at `$9F23`/`$9F24`, and it is
+   already present and working in this build.
 
 ---
 
@@ -196,5 +200,7 @@ Two fixes, in order of value:
    is needed. A small instruction line buffer on top of that is the step after.
 2. **Grow the BRAM window.** Killing the X16's `rom_banks` (256 KB) and
    `lowram_bram` (40 KB) freed ~288 M10K blocks against a 553-block budget that
-   was previously 99% full. Bank 0 currently takes ~52. There is room to back
-   part of bank `$01` too if profiling says so.
+   was previously 99% full. Bank 0 currently takes ~52. Most of that headroom
+   has since gone to VERA816's 352 KB VRAM — 506/553 blocks used, 47 free
+   ([MEMORY_MAP.md](MEMORY_MAP.md) §4) — so backing part of bank `$01` too is
+   now a much tighter fit.

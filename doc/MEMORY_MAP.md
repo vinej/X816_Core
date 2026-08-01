@@ -121,7 +121,7 @@ not `$00` — returning zero makes device-probing code false-positive.
 it); bit 1 reads the CPU's live E flag, so software can assert it is really in
 native mode.
 
-### SD block device — `$9F81-$9F8A`
+### SD block device — `$9F81-$9F8C`
 
 `rtl/sd_block.sv`, and `src/sdblock.c` in the emulator. The guest SD card is a
 FAT32 image file on the MiSTer's own SD card, mounted from the OSD
@@ -131,16 +131,28 @@ the guest; the HPS only moves 512-byte blocks.
 | Address | Register |
 |---|---|
 | `$9F81-$9F84` | `LBA[31:0]`, little-endian |
-| `$9F85-$9F87` | `MEM[23:0]` DMA address, little-endian |
+| `$9F85-$9F87` | `MEM[23:0]` DMA address, little-endian (`READ` only) |
 | `$9F88` | `COUNT` — blocks, 1-255 (`READ` only) |
-| `$9F89` | write: `CMD`  ·  read: `STATUS` |
-| `$9F8A` | **reserved — must stay unmapped**, see below |
-| `$9F8B` | `DATA` — block-buffer window, auto-incrementing |
+| `$9F89` | `CMD` — write-only |
+| `$9F8A` | `STATUS` — read-only |
+| `$9F8B` | **reserved — must stay unmapped**, see below |
+| `$9F8C` | `DATA` — block-buffer window, auto-incrementing |
 
 `CMD`: 1 = `READ` (card → memory, `COUNT` blocks, by DMA), 2 = `WRITE`
 (buffer → card, one block), 3 = `READBUF` (card → buffer, one block, memory
 untouched), 4 = rewind the buffer window.
 `STATUS`: bit 0 busy, bit 1 error, bit 7 card present.
+
+**`CMD` and `STATUS` are separate addresses on purpose.** The obvious design is
+one register — write the command, read the status back — and it does not
+survive a C compiler: Calypsi elides a volatile read that immediately follows a
+volatile write to the *same* address, and tests the value it wrote instead.
+`SD_CMD = 3; return SD_CMD & 2;` loses its read, and command 3 has bit 1 set,
+so every status check returned "error". Splitting the addresses removes the
+hazard at the source: a read of `STATUS` is never a read of the address just
+written, so there is nothing for an optimiser to fold. It is also the more
+honest description of the hardware — these were always two different registers
+wearing one address.
 
 **Error means "that block is not on this card".** Every request is
 bounds-checked against the mounted image's size, per block, so a multi-block
@@ -154,22 +166,23 @@ because the filesystem above it cannot tell a short card from a good one.
 
 **Software never polls.** The CPU is frozen for the whole transfer, so the
 instruction after the `CMD` write executes once it has completed — read
-`$9F89` afterwards to check for an error. Busy therefore always reads back 0;
-the CPU cannot observe itself stalled, for the same reason `cpu_wait_state` is
-not exposed in SYSCTL.
+`STATUS` (`$9F8A`) afterwards to check for an error. Busy therefore always
+reads back 0; the CPU cannot observe itself stalled, for the same reason
+`cpu_wait_state` is not exposed in SYSCTL.
 
 `READBUF` exists because a FAT chain walk or a directory scan inspects a few
 bytes of a sector, and copying it into RAM first would be wasted work.
 
-**`$9F8A` is a deliberate gap and nothing readable may ever go there.** `DATA`
+**`$9F8B` is a deliberate gap and nothing readable may ever go there.** `DATA`
 has a read side effect — it advances the buffer pointer — and a 16-bit read is
 two bus cycles, so reading the register immediately *below* `DATA` also reads
-`DATA` and eats a byte. With `DATA` at `$9F8A`, next to `STATUS`, every status
-check silently consumed a byte of the sector. That is not an exotic case: the
-Calypsi manual states the compiler "may generate code that reads 8 and 24 bit
-objects using 16 bit access", so an ordinary C status poll does it. It showed
-up as an assembly test passing while the identical C sequence failed. Only the
-register *below* a side-effecting one is at risk; registers above it are fine.
+`DATA` and eats a byte. When `DATA` sat at `$9F8A`, next to the status
+register, every status check silently consumed a byte of the sector. That is
+not an exotic case: the Calypsi manual states the compiler "may generate code
+that reads 8 and 24 bit objects using 16 bit access", so an ordinary C status
+poll does it. It showed up as an assembly test passing while the identical C
+sequence failed. Only the register *below* a side-effecting one is at risk;
+registers above it are fine.
 
 **This is not the X16's SD path.** The X16 bit-bangs VERA's SPI at `$9F3E` with
 an emulated SPI card behind it — CMD17/CMD24, CRC7, R1 polling, one byte per
@@ -185,7 +198,14 @@ through the CPU port, which means muxing into the stall network that
 hot path for a filesystem; writes are rare, and buffered writes are still far
 faster than SPI because there is no per-byte command overhead.
 
-`$9F8C-$9F8F` free — the firmware write-protect enable goes here.
+`$9F8D-$9F8F` — keyboard diagnostic counters, beside the SD device rather than
+part of it ([x816.sv](../x816.sv)): make codes that crossed into the core
+(`$9F8D`), makes that reached the SMC key FIFO (`$9F8E`), keys dropped because
+the FIFO was full (`$9F8F`). Free-running 8-bit, wrapping, cleared only by
+reset — software reads them twice and subtracts, and the first counter that
+falls short of what was typed names the stage that lost the keystroke. That
+fills the `$9F8x` block, so the firmware write-protect enable can no longer go
+here.
 
 ---
 
