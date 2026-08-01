@@ -70,6 +70,8 @@ TRY:
   RUN GREEN.BIN         PAINTS THE SCREEN GREEN
   RUN CHARMAP.BIN       EVERY CP437 CHARACTER, WITH ITS HEX CODE
   RUN KERNTEST.BIN      KERNEL JUMP TABLE -- GREEN IS PASS
+  RUN KFSTEST.BIN       KERNEL FILE CALLS -- GREEN IS PASS
+  RUN LIBFS.BIN         X16LIB OVER THE KERNEL -- GREEN IS PASS
   DUMP 01:0000 40
 
 THE CARD IS WRITABLE:
@@ -103,6 +105,11 @@ DEMOS = [
     ("CHARMAP.BIN", os.path.join(CALYPSI, "examples", "shell", "charmap.bin")),
     # Kernel jump table conformance: green if every $00:FE00 entry behaves.
     ("KERNTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "kerntest.bin")),
+    # The filesystem half of the table, and then the same ground through the
+    # converted x16lib. Both WRITE to the card -- they create and remove their
+    # own directory, and kfstest leaves /KEEP.TXT behind on purpose.
+    ("KFSTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "kfstest.bin")),
+    ("LIBFS.BIN",   os.path.join(CALYPSI, "examples", "shell", "libfs.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),
