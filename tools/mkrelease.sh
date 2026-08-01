@@ -67,6 +67,7 @@ fi
 # Done BEFORE `rm -rf`, so a failure leaves the previous good release intact --
 # refusing after the wipe turns a caught mistake into a worse one.
 SHELL_BIN="$CALYPSI/examples/shell/shell.bin"
+KERNEL_BIN="$CALYPSI/examples/shell/kernel.bin"
 if [ -n "$CALYPSI" ] && [ -x "$CALYPSI/Calypsi/calypsi-65816-5.18/bin/cc65816" ]; then
     echo "build  : $CALYPSI/examples/shell"
     if ! (cd "$CALYPSI/examples/shell" && sh build.sh >/dev/null 2>&1); then
@@ -75,16 +76,16 @@ if [ -n "$CALYPSI" ] && [ -x "$CALYPSI/Calypsi/calypsi-65816-5.18/bin/cc65816" ]
         echo "  the existing release under releases/mister/ is untouched." >&2
         exit 1
     fi
-elif [ -n "$CALYPSI" ] && [ -f "$SHELL_BIN" ]; then
+elif [ -n "$CALYPSI" ] && [ -f "$KERNEL_BIN" ]; then
     # No toolchain: fall back to whatever is there, but refuse it if the
     # sources have moved on.
     NEWER=$(find "$CALYPSI/runtime" "$CALYPSI/examples/shell" \
                  \( -name '*.c' -o -name '*.h' -o -name '*.s' \) 2>/dev/null \
             | while read -r f; do
-                  [ "$f" -nt "$SHELL_BIN" ] && echo "$f"
+                  [ "$f" -nt "$KERNEL_BIN" ] && echo "$f"
               done)
     if [ -n "$NEWER" ]; then
-        echo "REFUSING: no toolchain, and shell.bin is older than its sources:" >&2
+        echo "REFUSING: no toolchain, and kernel.bin is older than its sources:" >&2
         echo "$NEWER" | sed 's|.*/|    |' >&2
         echo "  the existing release under releases/mister/ is untouched." >&2
         exit 1
@@ -97,6 +98,16 @@ mkdir -p "$OUT/_Computer" "$OUT/games/X816"
 cp "$RBF_SRC" "$OUT/_Computer/$RBF_DST"           || exit 1
 echo "core   : _Computer/$RBF_DST  ($(stat -c%s "$RBF_SRC") bytes)"
 
+# boot2.rom = the RESIDENT KERNEL, loaded into the write-protected firmware
+# region at $F0:0000 (doc/KERNEL.md sections 3 and 7). boot1.rom stays as the
+# loadable-shell fallback at $01:0000: boot.s prefers the firmware, so with
+# both present the kernel wins, and a build without a kernel still boots.
+if [ -n "$CALYPSI" ] && [ -f "$KERNEL_BIN" ]; then
+    cp "$KERNEL_BIN" "$OUT/games/X816/boot2.rom"  || exit 1
+    echo "kernel : games/X816/boot2.rom       ($(stat -c%s "$KERNEL_BIN") bytes)"
+else
+    echo "kernel : SKIPPED -- $KERNEL_BIN not built" >&2
+fi
 if [ -n "$CALYPSI" ] && [ -f "$SHELL_BIN" ]; then
     cp "$SHELL_BIN" "$OUT/games/X816/boot1.rom"   || exit 1
     echo "shell  : games/X816/boot1.rom       ($(stat -c%s "$SHELL_BIN") bytes)"
@@ -131,8 +142,9 @@ with what is already there:
 
 Then pick X816 from the Computer menu.
 
-The core comes up at the X816 prompt with no further action -- boot1.rom is
-auto-loaded. Type HELP.
+The core comes up at the X816 prompt with no further action -- boot2.rom
+(the resident kernel) is auto-loaded into the firmware region, and boot1.rom
+(the same prompt as a loadable program) rides along as a fallback. Type HELP.
 
 Colour bands instead of a prompt mean no program was loaded, not a broken
 core. In that case open the OSD (F12), choose "Load Image" and pick
