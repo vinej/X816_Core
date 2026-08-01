@@ -155,6 +155,9 @@ X816
 EXEC does not return. Reset the core to get the prompt back. `load file [addr]`
 puts an image in memory WITHOUT running it, for poking at with `dump`.
 
+**Confirmed on hardware:** `run` loads a program off the card, relocates it over
+the shell and starts it, on a real DE10-Nano.
+
 GREEN.BIN is the thing to try first if a program will not start: it is 164 bytes
 and touches nothing but VERA, so a green screen means the whole load-and-go path
 works and the fault is in the program.
