@@ -301,14 +301,21 @@ written against VERA816.
    the one test that catches a truncation mismatch.
 6. **Sprite reach (§5.1).** A sprite whose attribute address points above
    128 KB (bits [5:4] of byte 1 non-zero) renders the pixels stored there; the
-   same attribute with those bits zero renders from the low copy. *(Status:
-   RTL widened 2026-08-01; emulator + test update pending — until this test
-   is green on both, do not place sprite data above 128 KB.)*
+   same attribute with those bits zero renders from the low copy.
 7. **Blitter (§4.3).** ID reads `$B6`; fill and copy at every alignment;
    `LEN=0` no-op; wrap at `$7FFFF`; hole semantics; pointer readback;
-   busy polling. *(Status: RTL green in `sim/run.sh blit` — eight
-   self-checking cases against the real arbiter and VRAM, 2026-08-01;
-   emulator implementation pending.)*
+   busy polling.
+
+> **Status of 6 and 7 as of 2026-08-01: green in RTL simulation
+> (`sim/run.sh blit`, eight self-checking cases against the real arbiter and
+> the real 352 KB VRAM) and green in the emulator
+> (`X816_Calypsi/examples/vera/run-blit.sh`, with a negative control).
+> NOT YET RUN ON HARDWARE** — both are in the 2026-08-01 bitstream, but
+> `BLITTEST.BIN` reached the demo card after that bitstream was tested on a
+> DE10-Nano. `RUN BLITTEST.BIN` from `/DEMO` closes it. Until then, treat
+> sprite data above 128 KB as unproven on silicon: the emulator agreeing with
+> the RTL says the contract is consistent, not that the bitstream implements
+> it (that distinction has caught this project before).
 
 ## 9. Explicitly unchanged
 

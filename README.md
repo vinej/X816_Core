@@ -76,6 +76,13 @@ Confirmed on real hardware (DE10-Nano):
 | console | 80x60 text, the SMC keyboard, Shift |
 | storage | FAT32 read **and write** - create, copy, rename, delete, mkdir, rmdir, from the prompt |
 | programs | `boot1.rom` auto-loads the shell at core start; `run` loads a program off the card and starts it |
+| kernel | **resident**: `boot2.rom` loads it into the write-protected firmware region at `$F0:0000`, so the `$00:FE00` jump table survives `run` (2026-08-01) |
+
+The bitstream of 2026-08-01 also carries the VERA816 **blitter** and the
+sprite address widening ([doc/VERA816.md](doc/VERA816.md) §4.3 and §5.1). Both
+are green in RTL simulation and in the emulator; their on-hardware conformance
+run is `RUN BLITTEST.BIN` from the demo card, which reached the card after
+that bitstream was tested and has not been run on a board yet.
 
 The FAT32 writer is verified against **pyfatfs**, an independent
 implementation, rather than against this project's own reader. Two halves

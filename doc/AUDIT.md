@@ -325,15 +325,23 @@ first once the sim port lands — that is the workflow upstream already runs.
 
 ## 6. Disposition — resolution pass of 2026-08-01 (same day, second half)
 
-Every finding above was resolved or explicitly dispositioned. RTL changes are
-**sim-proven and awaiting one Quartus compile**; software changes are built
-and regression-green (emulator suite + host harness + `sim/` + `sim816/`).
+Every finding above was resolved or explicitly dispositioned. Software changes
+are built and regression-green (emulator suite + host harness + `sim/` +
+`sim816/`), and the RTL was compiled and **confirmed running on a DE10-Nano
+the same day** — the bitstream of 2026-08-01 13:33, which fits in 507/553 RAM
+blocks (unchanged: the blitter went into existing headroom) and 42% of ALMs.
+
+One thing is deliberately **not** claimed as hardware-verified: the blitter
+and the sprite widening are *in* that bitstream, but `BLITTEST.BIN` reached
+the demo card after it was tested, so their conformance run on a board is
+still outstanding. Simulation and the emulator both pass it. See
+[VERA816.md](VERA816.md) §8 tests 6 and 7.
 
 | Finding | Disposition |
 |---|---|
 | H-1 kernel residency | **FIXED.** Kernel is a firmware image at `$F0:0000` (`runtime/x816-kernel.scm`, `kernel.bin` → `boot2.rom`, ioctl `16'h0080`), write-protected in RTL (`x816.sv` `fw_region`), boot checks firmware magic first (`boot/boot.s`), thunks context-switch (`kerntab.s` `KENTER`, `-DKERNEL_RESIDENT`), the resident image installs the table (`kernelmain.c`), `K_EXEC`/`K_EXIT` implemented (`kexec.c`, guarded firmware re-entry), goshell re-enters firmware on ESC, program maps honour the `$2000-$2FFF` claim. Proven: `sim/run.sh fw` (+ write-protect probe), `run-fwboot.sh` (+ corrupted-magic negative), full regression suite. |
 | H-2 sh_readline special keys | **FIXED** (`shell.c`: discard `c > 0xFF`; comment corrected). |
-| M-1 sprite reach | **FIXED both sides.** RTL: `sprite_renderer.v` attr bits [13:12] (VERA816.md §5.1). Emulator: same decode, plus an out-of-bounds sprite-fetch latent bug fixed on the way (`video.c` now fetches via `video_space_read`). Conformance green: `examples/vera/run-blit.sh` test 8 renders one sprite from `$34000` via the new bits and one below 128 KB, probing both. Hardware confirmation rides the pending Quartus round. |
+| M-1 sprite reach | **FIXED both sides.** RTL: `sprite_renderer.v` attr bits [13:12] (VERA816.md §5.1). Emulator: same decode, plus an out-of-bounds sprite-fetch latent bug fixed on the way (`video.c` now fetches via `video_space_read`). Conformance green: `examples/vera/run-blit.sh` test 8 renders one sprite from `$34000` via the new bits and one below 128 KB, probing both. In the 2026-08-01 bitstream; the on-board run is `RUN BLITTEST.BIN`, still outstanding. |
 | M-2 sd_block reset CDC | **FIXED** (`fsm_rst_sync`, same pattern as flat_sdram). |
 | M-3 MEMORY_MAP.md SD table | **FIXED** (transcribed from RTL, incl. the CMD/STATUS split rationale). |
 | M-4 `-O0` by copy-paste | **PARTIALLY resolved, rest dispositioned**: the volatile-elision contract is now stated in fat32.h/x816_sd.h and each build script; full `-O2` migration stays deferred behind the assembly-SD-accessor plan — under the pinned Calypsi 5.18 the risk is drift, and the recipes now all carry the warning. Consolidating ~10 recipes into one include remains open (tracked below). |

@@ -448,10 +448,11 @@ every kernel entry switches to the kernel context and back (`kerntab.s`
 `KENTER`/`KLEAVE`, assembled with `-DKERNEL_RESIDENT`), and `run` erasing
 `$01:0000` no longer touches the code the table points at. Proven in
 simulation (`X816_core/sim/run.sh fw` — firmware branch + write-protect on
-real RTL) and in the emulator (`examples/shell/run-fwboot.sh` — boot to
-prompt from `$F0:0000`, with a corrupted-magic negative control). The
-loadable-shell path stays as boot1.rom fallback, and the interface did not
-change — which was the point of fixing the interface first.
+real RTL), in the emulator (`examples/shell/run-fwboot.sh` — boot to
+prompt from `$F0:0000`, with a corrupted-magic negative control), and
+**confirmed green on a DE10-Nano on 2026-08-01** with the bitstream of that
+date. The loadable-shell path stays as boot1.rom fallback, and the interface
+did not change — which was the point of fixing the interface first.
 
 ### 10.1 Calling it from C
 

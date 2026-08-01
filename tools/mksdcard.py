@@ -75,6 +75,8 @@ TRY:
   RUN KFSTEST.BIN       KERNEL FILE CALLS -- GREEN IS PASS
   RUN LIBFS.BIN         X16LIB OVER THE KERNEL -- GREEN IS PASS
   RUN KEYSCAN.BIN       WHAT EVERY KEY SENDS -> /KEYMAP.TXT
+  RUN BLITTEST.BIN      VERA BLITTER + SPRITE REACH -- GREEN IS PASS
+                        (NO ESC FROM THIS ONE: RESET FOR THE PROMPT)
 
 ESC RETURNS TO THE SHELL FROM ANY OF THESE.
   DUMP 01:0000 40
@@ -120,6 +122,12 @@ DEMOS = [
     # actually sent to /KEYMAP.TXT. Those codes are DISCARDED before any
     # program sees them today, so they cannot be found any other way.
     ("KEYSCAN.BIN", os.path.join(CALYPSI, "examples", "shell", "keyscan.bin")),
+    # VERA816 conformance: the blitter (doc/VERA816.md 4.3), the sprite reach
+    # above 128 KB (5.1) and the firmware write-protect (KERNEL.md 3). This is
+    # the only route those three have to real hardware -- the emulator can
+    # only ever prove the contract, not the bitstream. Unlike the others it
+    # does not link the console, so ESC does not return: reset for the prompt.
+    ("BLITTEST.BIN", os.path.join(CALYPSI, "examples", "vera", "blittest.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),
