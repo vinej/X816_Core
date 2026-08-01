@@ -364,11 +364,21 @@ module sd_block (
     // ------------------------------------------------------------------
     // Transfer FSM (sdram_clk)
     // ------------------------------------------------------------------
+    // reset_n's DEASSERT is synchronous to cpu_clk (x816.sv cpu_rst_sync);
+    // re-synchronise the release into this domain before it feeds an async
+    // reset pin here -- same pattern, and same reason, as flat_sdram.sv's
+    // rstf_sync. Assert is still async, which is fine.
+    logic [1:0] fsm_rst_sync;
+    always_ff @(posedge sdram_clk or negedge reset_n)
+        if (!reset_n) fsm_rst_sync <= 2'b00;
+        else          fsm_rst_sync <= {fsm_rst_sync[0], 1'b1};
+    wire fsm_reset_n = fsm_rst_sync[1];
+
     logic [2:0] start_sync;
     wire        start_pulse = start_sync[2] ^ start_sync[1];
 
-    always_ff @(posedge sdram_clk or negedge reset_n) begin
-        if (!reset_n) begin
+    always_ff @(posedge sdram_clk or negedge fsm_reset_n) begin
+        if (!fsm_reset_n) begin
             st <= S_IDLE; sd_rd <= 1'b0; sd_wr <= 1'b0;
             done_tgl <= 1'b0; err_sd <= 1'b0; dma_wr <= 1'b0;
             start_sync <= 3'd0; ack_q <= 1'b0;
