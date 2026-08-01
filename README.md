@@ -83,14 +83,16 @@ on hardware too: `RUN BLITTEST.BIN` from the demo card exercises fill and copy
 at every alignment above and below 128 KB, the wrap through the unpopulated
 hole, and the firmware write-protect, and comes up green on a DE10-Nano.
 
-That same run found a bug the whole test suite had missed. **Sprites, and both
-tile layers, could only fetch from the first 128 KB** — the wires joining the
-renderers to the VRAM arbiter in `top.v` were still 15 bits wide when
-everything at both ends had been widened to 17, and Verilog truncates without
-a word. Everything that had "proved" the 352 KB reached VRAM through the CPU
-data port, which is a different path and was never truncated. Fixed, and
-`sim/run.sh lint` now fails on any such width mismatch — but the fix needs a
-new bitstream, so the sprite half of that test is outstanding.
+That test also found a bug the whole suite had missed, and then confirmed the
+fix. **Sprites, and both tile layers, could only fetch from the first 128 KB**
+— the wires joining the renderers to the VRAM arbiter in `top.v` were still
+15 bits wide when everything at both ends had been widened to 17, and Verilog
+truncates without a word. Everything that had "proved" the 352 KB reached VRAM
+through the CPU data port, which is a different path and was never truncated.
+The failure was almost invisible: a truncated `$34000` lands on `$14000`,
+which held the *other* sprite, so the screen looked plausible. `sim/run.sh
+lint` now fails on any such width mismatch, and the second bitstream renders
+the test's high sprite from above 128 KB correctly.
 
 The FAT32 writer is verified against **pyfatfs**, an independent
 implementation, rather than against this project's own reader. Two halves

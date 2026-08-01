@@ -358,10 +358,18 @@ Why it survived, which is the more useful half:
   Fixing it was necessary and not sufficient — and made the failure visible,
   because the renderer then computed a correct address that got chopped.
 
-Fixed by widening the three wires. `sim/run.sh lint` now elaborates the VERA
-tree and fails on any port/connection width mismatch — it names this bug in
-six lines and costs seconds, and it has a negative control. Requires a new
-bitstream; the sprite re-run (`RUN BLITTEST.BIN`) is outstanding.
+Fixed by widening the three wires, and **confirmed on hardware the same day**:
+the 14:18 bitstream renders `BLITTEST.BIN` green with one white and one blue
+rectangle, so a renderer now fetches from `$34000` and displays it.
+`sim/run.sh lint` elaborates the VERA tree and fails on any port/connection
+width mismatch — it names this bug in six lines, costs seconds, and has a
+negative control.
+
+**Residual, and it is the honest one:** only the SPRITE renderer has been
+proved above 128 KB. Layers 0 and 1 share the same fix and the same arbiter,
+which is a good reason to expect them to work and not evidence that they do —
+VERA816.md §8 test 5 (a 640×480 8bpp scanout past line 204) is still
+unimplemented, and it is the test that covers them.
 
 | Finding | Disposition |
 |---|---|

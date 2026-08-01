@@ -295,8 +295,15 @@ recovered without dropping FX.
 > were 17, so layer 0, layer 1 and sprites could only ever fetch from the first
 > 128 KB. Nothing caught it: test 5 would have, and did not exist; the paint
 > at the end of `vramtest.s` is 320×240, which fits inside 128 KB. It took a
-> sprite on real hardware rendering the wrong pixels. `sim/run.sh lint` now
-> fails on any such truncation, and test 5 below is no longer optional.
+> sprite on real hardware rendering the wrong pixels. Fixed and **confirmed on
+> hardware 2026-08-01** (tests 6–7 below); `sim/run.sh lint` now fails on any
+> such truncation.
+>
+> **Test 5 is still not implemented, and is now the only untested path.**
+> Sprites proved a renderer can fetch above 128 KB, and the tile layers share
+> that fix and that arbiter — but "share the fix, so presumably fine" is the
+> reasoning that caused this episode. A 640×480 8bpp scanout is the reason the
+> 352 KB exists, and nothing has displayed one yet.
 
 Both implementations must pass identically before any application software is
 written against VERA816.
@@ -319,22 +326,21 @@ written against VERA816.
    `LEN=0` no-op; wrap at `$7FFFF`; hole semantics; pointer readback;
    busy polling.
 
-> **Status of 6 and 7, from the hardware run of 2026-08-01.**
-> `BLITTEST.BIN` was run on a DE10-Nano and the result split the two:
+> **Status of 6 and 7: GREEN ON HARDWARE**, DE10-Nano, 2026-08-01, with the
+> 14:18 bitstream. `BLITTEST.BIN` paints green and shows one **white**
+> rectangle (sprite data at `$34000`, reached through the §5.1 attribute bits
+> and put there by the blitter) beside one **blue** (the same stock address
+> field with those bits zero). That is the whole widening proved end to end on
+> silicon: the CPU wrote it, the blitter moved it, a renderer fetched it from
+> above 128 KB, and the display showed it.
 >
-> * **Test 7, the blitter: GREEN on hardware.** Fill and copy at every
->   alignment, above and below 128 KB, `LEN=0`, the wrap through the hole,
->   pointer readback — plus the firmware write-protect — all confirmed on
->   silicon. The blitter reaches the full 19-bit space, because its `vram_if`
->   port was wired at the right width.
-> * **Test 6, sprite reach: FAILED on hardware**, and correctly so. Both
->   sprites rendered from the low copy, which is exactly what a 15-bit sprite
->   address does with a `$34000` target: it truncates to `$14000`, where the
->   low copy happens to live. The cause was the `top.v` wire width described
->   in the box above, not the attribute decode. Fixed 2026-08-01; **the
->   re-run is outstanding** and needs a new bitstream.
+> It took two hardware rounds. The first showed **two blue** rectangles —
+> a 15-bit sprite address truncates `$34000` to `$14000`, which is exactly
+> where the low copy lives, so the failure rendered as a plausible picture.
+> The cause was the `top.v` wire width in the box above, not this attribute
+> decode.
 >
-> This is the distinction that matters and it is worth keeping: sim and the
+> Worth keeping, because it is what those two rounds bought: sim and the
 > emulator agreeing proves the CONTRACT is consistent. Only the board proves
 > the BITSTREAM implements it.
 
