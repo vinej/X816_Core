@@ -7,3 +7,4 @@ vsim.wlf
 *.rom
 *.hex
 boot/
+lintwork/

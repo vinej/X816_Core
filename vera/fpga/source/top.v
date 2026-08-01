@@ -796,17 +796,21 @@ module top(
     //////////////////////////////////////////////////////////////////////////
     // Video RAM
     //////////////////////////////////////////////////////////////////////////
-    wire [14:0] l0_addr;
+    // VERA816: 17-bit WORD address, the width layer_renderer/sprite_renderer
+    // drive and vram_if expects. These three were left at the stock 15 bits
+    // when everything around them was widened, which silently truncated every
+    // RENDERER fetch to the first 128 KB -- see the note in vram_if.v.
+    wire [16:0] l0_addr;
     wire [31:0] l0_rddata;
     wire        l0_strobe;
     wire        l0_ack;
 
-    wire [14:0] l1_addr;
+    wire [16:0] l1_addr;
     wire [31:0] l1_rddata;
     wire        l1_strobe;
     wire        l1_ack;
 
-    wire [14:0] spr_addr;
+    wire [16:0] spr_addr;
     wire [31:0] spr_rddata;
     wire        spr_strobe;
     wire        spr_ack;

@@ -78,11 +78,19 @@ Confirmed on real hardware (DE10-Nano):
 | programs | `boot1.rom` auto-loads the shell at core start; `run` loads a program off the card and starts it |
 | kernel | **resident**: `boot2.rom` loads it into the write-protected firmware region at `$F0:0000`, so the `$00:FE00` jump table survives `run` (2026-08-01) |
 
-The bitstream of 2026-08-01 also carries the VERA816 **blitter** and the
-sprite address widening ([doc/VERA816.md](doc/VERA816.md) §4.3 and §5.1). Both
-are green in RTL simulation and in the emulator; their on-hardware conformance
-run is `RUN BLITTEST.BIN` from the demo card, which reached the card after
-that bitstream was tested and has not been run on a board yet.
+The VERA816 **blitter** ([doc/VERA816.md](doc/VERA816.md) §4.3) is confirmed
+on hardware too: `RUN BLITTEST.BIN` from the demo card exercises fill and copy
+at every alignment above and below 128 KB, the wrap through the unpopulated
+hole, and the firmware write-protect, and comes up green on a DE10-Nano.
+
+That same run found a bug the whole test suite had missed. **Sprites, and both
+tile layers, could only fetch from the first 128 KB** — the wires joining the
+renderers to the VRAM arbiter in `top.v` were still 15 bits wide when
+everything at both ends had been widened to 17, and Verilog truncates without
+a word. Everything that had "proved" the 352 KB reached VRAM through the CPU
+data port, which is a different path and was never truncated. Fixed, and
+`sim/run.sh lint` now fails on any such width mismatch — but the fix needs a
+new bitstream, so the sprite half of that test is outstanding.
 
 The FAT32 writer is verified against **pyfatfs**, an independent
 implementation, rather than against this project's own reader. Two halves
@@ -91,9 +99,11 @@ agreeing proves that they agree, not that either is right.
 `sh boot/build.sh vramtest` builds a
 bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)
 — green on pass, red on fail — and it comes up green on a DE10-Nano as well as
-on the emulator. That proves the full 352 KB is addressable, the 19-bit path
-works including bits 17 and 18, the unpopulated region reads zero without
-aliasing, auto-increment wraps, and `VRAMCAP` reads 22.
+on the emulator. That proves the full 352 KB is addressable **from the CPU
+data port**, the 19-bit path works including bits 17 and 18, the unpopulated
+region reads zero without aliasing, auto-increment wraps, and `VRAMCAP` reads
+22. It says nothing about the renderers, which reach VRAM by another path
+entirely — a distinction that hid a real bug for weeks (see above).
 
 Power-on runs the boot stub: enters native mode, sets up S/D/DBR, copies
 itself into RAM and drops the ROM overlay, then brings VERA up in 320×240 8bpp

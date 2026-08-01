@@ -120,7 +120,15 @@ RTL change.
 
 **Phase 5 — VERA816 conformance.** `tb_verafx`/`tb_pcm` with the full VERA
 compile; add the 19-bit/`BASEX` widening cases and a sprite-fetch-above-128KB
-case (AUDIT.md M-1 — write the failing test first, then decide widen-vs-doc).
+case. **Now the highest-value phase left**: AUDIT.md H-3 was a truncation on
+the renderer side of VRAM that no simulation covered, because every existing
+test reaches VRAM through the CPU port. `run.sh lint` catches the *width*
+class statically; only a scanout testbench catches a renderer that addresses
+the wrong place for any other reason.
+
+Extending `lint` to elaborate `x816.sv` itself is worth doing at the same
+time — it needs the `sys/` framework files compiled, which no target does
+yet, so the core's own top level has never been checked for this class.
 
 ## 4b. Notes from the Phase-1 port (read before writing the next TB)
 

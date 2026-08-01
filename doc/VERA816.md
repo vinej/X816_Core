@@ -249,7 +249,7 @@ decode the same two bits identically.
 |---|---|
 | `vera/fpga/source/main_ram.v` | see §7 |
 | `vera/fpga/source/vram_if.v` | `if0_addr` 17→19 (CPU byte), `if1_addr`/`if2_addr`/`if3_addr` 15→17 (word); **if4** = the blitter's lowest-priority R/W word port (§4.3) |
-| `vera/fpga/source/top.v` | `vram_addr_0_r`/`vram_addr_1_r` 17→19; DCSEL-32 decode; `l0/l1_map_baseaddr` and `l0/l1_tile_baseaddr` 8→10 bits; DCSEL-33 blitter bank + `blit816` instantiation |
+| `vera/fpga/source/top.v` | `vram_addr_0_r`/`vram_addr_1_r` 17→19; DCSEL-32 decode; `l0/l1_map_baseaddr` and `l0/l1_tile_baseaddr` 8→10 bits; DCSEL-33 blitter bank + `blit816` instantiation; **`l0_addr`/`l1_addr`/`spr_addr` 15→17 — the wires joining the renderers to `vram_if`, missed until 2026-08-01 (§8)** |
 | `vera/fpga/source/addr_data.v` | `ADDRX` live-window bits, FX interaction with the 19-bit addresses (this row was missing from earlier revisions of this list) |
 | `vera/fpga/source/graphics/layer_renderer.v` | `bus_addr` 15→17; `map_addr`/`tile_addr` 15→17; §5 fix |
 | `vera/fpga/source/graphics/sprite_renderer.v` | `bus_addr` 15→17; `sprite_attr_addr` 12→14 bits (§5.1) |
@@ -278,12 +278,25 @@ recovered without dropping FX.
 
 ## 8. Conformance tests
 
-> **Status: PASSING on both implementations as of 2026-07-30.**
-> `boot/vramtest.s` implements all five and paints green on pass, red on fail.
-> Verified green on the emulator and on a DE10-Nano. Build the test bitstream
-> with `sh boot/build.sh vramtest` — and read the warning in that script about
+> **Status, corrected 2026-08-01.** `boot/vramtest.s` implements tests **1–4**
+> and paints green on pass, red on fail; those four are green on the emulator
+> and on a DE10-Nano. **Test 5 was never implemented** — an earlier revision of
+> this document claimed all five were passing, and that claim is what let the
+> bug in the box below survive for weeks. Build the test bitstream with
+> `sh boot/build.sh vramtest` — and read the warning in that script about
 > Quartus's hex-update fast path first, or you will flash a bitstream that
 > still contains the previous boot ROM.
+>
+> **Read this before trusting any "the widening works" claim.** Tests 1–4 all
+> reach VRAM through the **CPU data port**, which is a different physical path
+> (`vram_if` if0) from the one the display uses. They can pass with every
+> RENDERER still truncated — and they did. Until 2026-08-01 the three wires in
+> `top.v` joining the renderers to `vram_if` were 15 bits wide while both ends
+> were 17, so layer 0, layer 1 and sprites could only ever fetch from the first
+> 128 KB. Nothing caught it: test 5 would have, and did not exist; the paint
+> at the end of `vramtest.s` is 320×240, which fits inside 128 KB. It took a
+> sprite on real hardware rendering the wrong pixels. `sim/run.sh lint` now
+> fails on any such truncation, and test 5 below is no longer optional.
 
 Both implementations must pass identically before any application software is
 written against VERA816.
@@ -306,16 +319,24 @@ written against VERA816.
    `LEN=0` no-op; wrap at `$7FFFF`; hole semantics; pointer readback;
    busy polling.
 
-> **Status of 6 and 7 as of 2026-08-01: green in RTL simulation
-> (`sim/run.sh blit`, eight self-checking cases against the real arbiter and
-> the real 352 KB VRAM) and green in the emulator
-> (`X816_Calypsi/examples/vera/run-blit.sh`, with a negative control).
-> NOT YET RUN ON HARDWARE** — both are in the 2026-08-01 bitstream, but
-> `BLITTEST.BIN` reached the demo card after that bitstream was tested on a
-> DE10-Nano. `RUN BLITTEST.BIN` from `/DEMO` closes it. Until then, treat
-> sprite data above 128 KB as unproven on silicon: the emulator agreeing with
-> the RTL says the contract is consistent, not that the bitstream implements
-> it (that distinction has caught this project before).
+> **Status of 6 and 7, from the hardware run of 2026-08-01.**
+> `BLITTEST.BIN` was run on a DE10-Nano and the result split the two:
+>
+> * **Test 7, the blitter: GREEN on hardware.** Fill and copy at every
+>   alignment, above and below 128 KB, `LEN=0`, the wrap through the hole,
+>   pointer readback — plus the firmware write-protect — all confirmed on
+>   silicon. The blitter reaches the full 19-bit space, because its `vram_if`
+>   port was wired at the right width.
+> * **Test 6, sprite reach: FAILED on hardware**, and correctly so. Both
+>   sprites rendered from the low copy, which is exactly what a 15-bit sprite
+>   address does with a `$34000` target: it truncates to `$14000`, where the
+>   low copy happens to live. The cause was the `top.v` wire width described
+>   in the box above, not the attribute decode. Fixed 2026-08-01; **the
+>   re-run is outstanding** and needs a new bitstream.
+>
+> This is the distinction that matters and it is worth keeping: sim and the
+> emulator agreeing proves the CONTRACT is consistent. Only the board proves
+> the BITSTREAM implements it.
 
 ## 9. Explicitly unchanged
 

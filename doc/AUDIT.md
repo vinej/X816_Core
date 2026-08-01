@@ -331,11 +331,37 @@ are built and regression-green (emulator suite + host harness + `sim/` +
 the same day** — the bitstream of 2026-08-01 13:33, which fits in 507/553 RAM
 blocks (unchanged: the blitter went into existing headroom) and 42% of ALMs.
 
-One thing is deliberately **not** claimed as hardware-verified: the blitter
-and the sprite widening are *in* that bitstream, but `BLITTEST.BIN` reached
-the demo card after it was tested, so their conformance run on a board is
-still outstanding. Simulation and the emulator both pass it. See
-[VERA816.md](VERA816.md) §8 tests 6 and 7.
+`BLITTEST.BIN` was then run on that board, and **found a real bug that
+everything else had missed** — see H-3 below. The blitter itself came back
+green on silicon; the sprite half did not.
+
+### H-3 (found on hardware 2026-08-01, after the audit): the VERA816 widening
+### never reached the display side
+
+The three wires in `vera/fpga/source/top.v` connecting the renderers to
+`vram_if` — `l0_addr`, `l1_addr`, `spr_addr` — were left at the stock 15 bits
+when both ends were widened to 17. Verilog truncates silently, so **layer 0,
+layer 1 and sprites could only ever fetch from the first 128 KB** of the
+352 KB. The CPU data port and the blitter were unaffected: they use different
+`vram_if` ports that were wired correctly.
+
+Why it survived, which is the more useful half:
+
+* Every test of the widening used the **CPU data port** — a physically
+  different path from the renderers'. The march, hole, wrap and capability
+  tests can all pass with the display side truncated, and did.
+* The one test that would have caught it, VERA816.md §8 test 5 (bitmap
+  scanout past line 204), **was never implemented**, while the document
+  claimed all five tests passed. `vramtest.s`'s own paint is 320×240, which
+  fits inside 128 KB.
+* M-1 above blamed the sprite attribute field, which was *also* too narrow.
+  Fixing it was necessary and not sufficient — and made the failure visible,
+  because the renderer then computed a correct address that got chopped.
+
+Fixed by widening the three wires. `sim/run.sh lint` now elaborates the VERA
+tree and fails on any port/connection width mismatch — it names this bug in
+six lines and costs seconds, and it has a negative control. Requires a new
+bitstream; the sprite re-run (`RUN BLITTEST.BIN`) is outstanding.
 
 | Finding | Disposition |
 |---|---|

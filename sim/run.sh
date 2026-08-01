@@ -11,6 +11,8 @@
 #                     # (simulates ~1M cpu cycles -- takes a few minutes)
 #   ./run.sh blit     # VERA816 blitter unit test (blit816 + vram_if + the
 #                     # real 352 KB main_ram; fill/copy/wrap/contention)
+#   ./run.sh lint     # elaborate VERA's top and FAIL on any port/connection
+#                     # width mismatch (see the target for why this exists)
 #   ./run.sh all      # everything
 #
 # The DUT chain is the real RTL: p65c816_flat_wrap + bank0_ram + boot_rom
@@ -65,14 +67,55 @@ run_blit () {
   echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
 }
 
+# ---------------------------------------------------------------------------
+# lint -- port/connection width agreement across the whole VERA tree.
+#
+# WHY THIS IS A TARGET AND NOT A STYLE CHECK. When VRAM grew to 352 KB every
+# renderer's bus_addr and every vram_if port went 15 -> 17 bits, but the three
+# WIRES joining them in top.v stayed at 15. Verilog truncates silently, so
+# layer 0, layer 1 and sprites could only ever fetch from the first 128 KB --
+# for weeks, through a "passing" conformance suite, because every test that
+# checked the widening used the CPU data port (a different, genuinely 19-bit
+# path) and the one test that would have caught it was never implemented.
+#
+# It took a screen on real hardware to find. The simulator names it in six
+# lines and costs seconds, so it runs as a test now.
+# ---------------------------------------------------------------------------
+run_lint () {
+  local vf out n
+  vf=$(cd .. && grep -oE "vera/fpga/source/[a-zA-Z0-9_/]+\.v" files.qip | sort -u | sed 's|^|../|' | tr '\n' ' ')
+  rm -rf lintwork
+  vlib lintwork >/dev/null 2>&1
+  out=$(vlog -quiet -work lintwork $vf ../vera/fpga/source/addr_data.v \
+                                       ../vera/fpga/source/mult_accum.v 2>&1)
+  if echo "$out" | grep -q "^\*\* Error"; then
+    echo "$out" | grep "^\*\* Error" | head
+    echo "*** FAIL: the VERA tree does not compile ***"
+    return 1
+  fi
+  out=$(vsim -c -lib lintwork top -do "quit -f" 2>&1)
+  # `|| true` on both: grep exits 1 when it finds nothing, which is the GOOD
+  # outcome here, and this script runs under `set -e`.
+  n=$(echo "$out" | grep -c "PCDPC" || true)
+  echo "$out" | grep "PCDPC" | sed 's/^# \*\* Warning: //' || true
+  if [ "$n" -ne 0 ]; then
+    echo "*** FAIL: $n port/connection width mismatch(es) -- silent truncation ***"
+    return 1
+  fi
+  echo "[TB] VERA tree elaborates with no port/connection width mismatch"
+  echo "*** PASS ***"
+}
+
 case "${1:-all}" in
   boot)   run_boot 1 bootprobe.hex $PROBE_LEN ;;
   fw)     run_boot 2 fwprobe.hex   $FWPROBE_LEN ;;
   noboot) run_boot 0 bootprobe.hex $PROBE_LEN ;;
   blit)   run_blit ;;
-  all)    echo "----- boot (staged program) -----";    run_boot 1 bootprobe.hex $PROBE_LEN
+  lint)   run_lint ;;
+  all)    echo "----- lint (VERA port widths) -----";  run_lint
+          echo "----- boot (staged program) -----";    run_boot 1 bootprobe.hex $PROBE_LEN
           echo "----- fw (kernel firmware) -----";     run_boot 2 fwprobe.hex   $FWPROBE_LEN
           echo "----- blit (VRAM blitter) -----";      run_blit
           echo "----- noboot (bands fallback) -----";  run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  *)      echo "unknown target: $1 (boot | fw | noboot | blit | all)"; exit 1 ;;
+  *)      echo "unknown target: $1 (boot | fw | noboot | blit | lint | all)"; exit 1 ;;
 esac
