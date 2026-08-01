@@ -178,12 +178,72 @@ file at `$07:0000`" at all.
 |---|---|---|
 | `CON_PUTC` | `C` = character | — |
 | `CON_PUTS` | `C:X` = 24-bit pointer to a NUL-terminated string | — |
-| `CON_GETC` | — | `C` = character, blocking |
-| `CON_GETKEY` | — | `C` = character or 0 if none, non-blocking |
+| `CON_GETC` | — | `C` = key, blocking |
+| `CON_GETKEY` | — | `C` = key, or 0 if none, non-blocking |
 | `CON_CLS` | — | — |
 | `CON_GOTOXY` | `C` = column, `X` = row | — |
 | `CON_GETXY` | — | `C` = column, `X` = row |
 | `CON_PUTRAW` | `C` = column, `X` = row, `Y` = glyph code | — |
+
+**A key is sixteen bits, and the top byte is what makes it unambiguous:**
+
+| `C` | Meaning |
+|---|---|
+| `$0000` | nothing waiting (`CON_GETKEY` only) |
+| `$0001`–`$00FF` | a **character**, CP437 |
+| `$0100 \| n` | a **key with no character**, `n` = its position number |
+
+F1 and the CP437 glyph at `$70` cannot be told apart in eight bits, and a
+program legitimately receives both. Rather than invent control codes for the
+keys that lack characters — a table that would have to be kept in step with
+nothing — the key number is reported directly, so the low byte is exactly what
+`KEYSCAN.BIN` measures and the two cannot drift.
+
+The SMC sends **IBM key position numbers**, not ASCII and not PS/2 scancodes.
+Bit 7 set is a key-up. Measured on a DE10-Nano with `KEYSCAN.BIN`; every value
+agrees with `rtl/smc_x16.sv` and with the emulator's
+`keynum_from_SDL_Scancode`.
+
+| Key | | Key | | Key | |
+|---|---|---|---|---|---|
+| ESC | `$6E` | INS | `$4B` | KP0 | `$63` |
+| F1-F11 | `$70`-`$7A` | DEL | `$4C` | KP1 | `$5D` |
+| PRTSCR | `$7C` | HOME | `$50` | KP2 | `$62` |
+| TAB | `$10` | END | `$51` | KP3 | `$67` |
+| CAPS | `$1E` | PGUP | `$55` | KP4 | `$5C` |
+| LSHIFT | `$2C` | PGDN | `$56` | KP5 | `$61` |
+| RSHIFT | `$39` | UP | `$53` | KP6 | `$66` |
+| LCTRL | `$3A` | DOWN | `$54` | KP7 | `$5B` |
+| RCTRL | `$40` | LEFT | `$4F` | KP8 | `$60` |
+| LWIN | `$3B` | RIGHT | `$59` | KP9 | `$65` |
+| RWIN | `$3F` (*) | KP / | `$5F` | KP . | `$68` |
+| MENU | `$41` | KP * | `$64` | KP - | `$69` |
+| LALT | `$3C` | KP ENTER | `$6C` | KP + | `$6A` |
+| RALT | `$3E` | | | | |
+
+(*) Right GUI is `$3F` per the RTL. The keyboard used for the scan has no such
+key -- both the RWIN and MENU prompts answered `$41` -- so that one value comes
+from the RTL and everything else in this table was actually pressed.
+
+**The keypad IS distinct from the top row**, which was the open question: KP1 is
+`$5D` while the top-row 1 is `$02`. A program can tell them apart; the keymap
+chooses not to, mapping both to `'1'`, and NumLock does not turn the keypad into
+the navigation keys the way a PC does.
+
+**Four keys never arrive on MiSTer.** The framework claims them before the core
+sees them:
+
+| Key | Taken by |
+|---|---|
+| F12 | the OSD menu |
+| Scroll Lock | switch joystick |
+| Num Lock | keyboard/joystick mapping |
+| Pause | MiSTer's own use |
+
+Binding any of them works in the **emulator** and silently does nothing on the
+board, which is the worst way for a binding to fail. F1–F11 are yours.
+`KEYSCAN.BIN` does not ask for these four: pressing one during a scan does not
+merely fail to answer, it opens a menu over the top of the scan.
 
 `CON_PUTRAW` places a glyph by code and interprets nothing. `CON_PUTC` has to
 intercept `$08`, `$0A` and `$0D` as backspace, newline and return, which makes

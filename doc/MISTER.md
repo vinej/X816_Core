@@ -183,6 +183,32 @@ GREEN.BIN is the thing to try first if a program will not start: it is 164 bytes
 and touches nothing but VERA, so a green screen means the whole load-and-go path
 works and the fault is in the program.
 
+### Keys MiSTer keeps for itself
+
+Four keys never reach the core, because the framework claims them first:
+
+| Key | Taken by |
+|---|---|
+| F12 | the OSD menu |
+| Scroll Lock | switch joystick |
+| Num Lock | keyboard/joystick mapping |
+| Pause | MiSTer's own use |
+
+Anything bound to one of these **works in the emulator and silently does
+nothing on the board** — the worst way for a key binding to fail. F1–F11 are
+yours. `KEYSCAN.BIN` deliberately does not ask for these four: pressing one
+mid-scan opens a menu over the top of the scan rather than answering it.
+
+`KEYSCAN.BIN` is how the rest were established. It asks for each key by name,
+reads the raw byte the SMC sent, and writes the table to `/KEYMAP.TXT` on the
+card — readable afterwards with `TYPE /KEYMAP.TXT`. The measured table is in
+[KERNEL.md §5.1](KERNEL.md).
+
+**ESC returns to the prompt** from `LIBFS.BIN`, `KFSTEST.BIN`, `KERNTEST.BIN`,
+`CHARMAP.BIN` and `KEYSCAN.BIN`. It reloads `/DEMO/SHELL.BIN` and hands over the
+way `RUN` does, so reading one result no longer means power-cycling the board to
+get to the next.
+
 If keys are dropped or ignored, `games/X816/` also carries `KBDECHO.BIN` and
 `KBDSTAT.BIN` under `/DEMO/`. Load either from the OSD: they count keystrokes at
 six points between the wire and the glyph, and the first count that falls short

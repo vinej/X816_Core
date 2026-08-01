@@ -127,6 +127,13 @@ it belongs in the tokeniser, not in individual handlers.
 
 ## 5. Line editing
 
+**ESC returns here from a conformance test.** `RUN` loads a program over the
+prompt at `$01:0000`, so a program that ends has nothing to go back to; ESC
+reloads `/DEMO/SHELL.BIN` and hands over the same way `RUN` does. The line
+editor itself does not yet do anything with ESC, the arrows or F1–F11 — they
+now REACH it (see [KERNEL.md §5.1](KERNEL.md)) and are ignored, which is the
+right default until it learns to use them.
+
 The keyboard already works on hardware (`boot/kbd.s`). The prompt needs, in
 order of value:
 
