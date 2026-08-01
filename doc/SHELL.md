@@ -61,7 +61,8 @@ Deliberately small. Everything here is a thin wrapper over
 | `ls [path]` | directory listing — `DIR_OPEN`/`DIR_NEXT` |
 | `cd path`, `pwd` | working directory |
 | `type file` | dump a file to the console |
-| `cp`, `mv`, `rm`, `mkdir`, `rmdir` | the obvious ones |
+| `rm file` | delete a file |
+| `cp`, `mv`, `mkdir`, `rmdir` | not yet; `mkdir` needs a directory cluster with `.` and `..` |
 
 **Programs**
 
@@ -69,6 +70,7 @@ Deliberately small. Everything here is a thin wrapper over
 |---|---|
 | `run file` | `EXEC` — load and go |
 | `load file [addr]` | load without running, for inspection |
+| `save file addr len` | write memory out as a file |
 
 **Memory** — this is where a bare machine earns its keep
 

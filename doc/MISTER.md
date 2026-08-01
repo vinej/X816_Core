@@ -151,6 +151,20 @@ X816
 > RUN /DEMO/GREEN.BIN  load a program off the card and go
 ```
 
+The card is WRITABLE:
+
+```
+> FILL 03:0000 20 5A
+> SAVE /PROGS/TEST.BIN 03:0000 20
+> LS /PROGS
+> RM /PROGS/TEST.BIN
+```
+
+`save` and `rm` do not ask for confirmation, matching `poke` and `fill`. The
+FAT32 writer keeps every FAT copy in step and maintains the end-of-directory
+marker, so a card written here still reads correctly on a PC -- verified against
+pyfatfs rather than against our own reader.
+
 `run` overwrites the shell with the program, which is the point -- KERNEL.md's
 EXEC does not return. Reset the core to get the prompt back. `load file [addr]`
 puts an image in memory WITHOUT running it, for poking at with `dump`.
