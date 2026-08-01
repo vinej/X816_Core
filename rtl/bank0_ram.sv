@@ -77,6 +77,11 @@ module bank0_ram (
     logic        pending = 1'b0;
     wire         ldf_pop = ldf_nonempty & ~pending;
 
+    // ack_tgl is DRIVEN by the cpu_clk block below but READ here first;
+    // declared before first use so the file stays legal SystemVerilog
+    // (simulators enforce declare-before-use; Quartus merely tolerates it).
+    logic        ack_tgl = 1'b0;
+
     always_ff @(posedge ld_clk) begin
         ack_s <= {ack_s[0], ack_tgl};
         ack_d <= ack_s[1];
@@ -97,7 +102,6 @@ module bank0_ram (
     end
 
     // ----- cpu_clk side: see the req flip, commit the byte, flip ack ----
-    logic       ack_tgl = 1'b0;
     logic [1:0] req_s   = 2'b00;
     logic       req_d   = 1'b0;
     always_ff @(posedge clk) begin
