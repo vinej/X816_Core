@@ -4,7 +4,10 @@ Date: 2026-08-01. Audited at X816_core `dd4e370` and X816_Calypsi `e3a2cff`, bot
 clean. Method: three parallel read-only reviews (core RTL + build pipeline;
 `X816_Calypsi/runtime` + its examples and build scripts; the upstream
 `x16_mister` simulation inventory), then synthesis. Every claim cites
-`file:line` as verified on those HEADs. Nothing was modified.
+`file:line` as verified on those HEADs. **Sections 1–5 are that review, and
+nothing was modified while it was written.** §6 is the resolution pass that
+followed the same day, and H-3 in it is the one finding no amount of reading
+produced — hardware did.
 
 Path shorthand: bare paths = `C:\quartus\projects\X816_core`;
 `RT\` = `C:\quartus\projects\X816_Calypsi\runtime`;
@@ -12,8 +15,9 @@ Path shorthand: bare paths = `C:\quartus\projects\X816_core`;
 `UP:` = `C:\quartus\projects\x16_mister`;
 `EMU\` = `C:\quartus\projects\X816_Emulator`.
 
-The companion document [SIMULATION.md](SIMULATION.md) covers the simulation gap
-and the port plan from upstream.
+Companion documents: [SIMULATION.md](SIMULATION.md) covers the simulation gap
+and the port from upstream, and [VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md)
+covers the VRAM-versus-VERA2 question and why the answer was a blitter.
 
 ---
 
@@ -331,9 +335,12 @@ are built and regression-green (emulator suite + host harness + `sim/` +
 the same day** — the bitstream of 2026-08-01 13:33, which fits in 507/553 RAM
 blocks (unchanged: the blitter went into existing headroom) and 42% of ALMs.
 
-`BLITTEST.BIN` was then run on that board, and **found a real bug that
-everything else had missed** — see H-3 below. The blitter itself came back
-green on silicon; the sprite half did not.
+`BLITTEST.BIN` was then run on that board and **found a real bug that
+everything else had missed** — H-3 below, the one finding in this document
+that no amount of reading produced. It took two hardware rounds: the first
+came back green with the blitter working and the sprite half wrong, the
+second (bitstream 14:18) came back fully green. The final state is that every
+finding here is closed, with one honest residual named at the end of H-3.
 
 ### H-3 (found on hardware 2026-08-01, after the audit): the VERA816 widening
 ### never reached the display side
@@ -375,7 +382,7 @@ unimplemented, and it is the test that covers them.
 |---|---|
 | H-1 kernel residency | **FIXED.** Kernel is a firmware image at `$F0:0000` (`runtime/x816-kernel.scm`, `kernel.bin` → `boot2.rom`, ioctl `16'h0080`), write-protected in RTL (`x816.sv` `fw_region`), boot checks firmware magic first (`boot/boot.s`), thunks context-switch (`kerntab.s` `KENTER`, `-DKERNEL_RESIDENT`), the resident image installs the table (`kernelmain.c`), `K_EXEC`/`K_EXIT` implemented (`kexec.c`, guarded firmware re-entry), goshell re-enters firmware on ESC, program maps honour the `$2000-$2FFF` claim. Proven: `sim/run.sh fw` (+ write-protect probe), `run-fwboot.sh` (+ corrupted-magic negative), full regression suite. |
 | H-2 sh_readline special keys | **FIXED** (`shell.c`: discard `c > 0xFF`; comment corrected). |
-| M-1 sprite reach | **FIXED both sides.** RTL: `sprite_renderer.v` attr bits [13:12] (VERA816.md §5.1). Emulator: same decode, plus an out-of-bounds sprite-fetch latent bug fixed on the way (`video.c` now fetches via `video_space_read`). Conformance green: `examples/vera/run-blit.sh` test 8 renders one sprite from `$34000` via the new bits and one below 128 KB, probing both. In the 2026-08-01 bitstream; the on-board run is `RUN BLITTEST.BIN`, still outstanding. |
+| M-1 sprite reach | **FIXED both sides.** RTL: `sprite_renderer.v` attr bits [13:12] (VERA816.md §5.1). Emulator: same decode, plus an out-of-bounds sprite-fetch latent bug fixed on the way (`video.c` now fetches via `video_space_read`). Conformance green: `examples/vera/run-blit.sh` test 8 renders one sprite from `$34000` via the new bits and one below 128 KB, probing both. **Green on a DE10-Nano** with the second bitstream of 2026-08-01 — but only after H-3, which is what the first on-board run exposed. |
 | M-2 sd_block reset CDC | **FIXED** (`fsm_rst_sync`, same pattern as flat_sdram). |
 | M-3 MEMORY_MAP.md SD table | **FIXED** (transcribed from RTL, incl. the CMD/STATUS split rationale). |
 | M-4 `-O0` by copy-paste | **PARTIALLY resolved, rest dispositioned**: the volatile-elision contract is now stated in fat32.h/x816_sd.h and each build script; full `-O2` migration stays deferred behind the assembly-SD-accessor plan — under the pinned Calypsi 5.18 the risk is drift, and the recipes now all carry the warning. Consolidating ~10 recipes into one include remains open (tracked below). |
