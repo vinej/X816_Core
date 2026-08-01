@@ -135,6 +135,7 @@ module top(
 
     wire [3:0] vera816_addrx_r;   // from addr_data: {ADDR1[18:17], ADDR0[18:17]}
     reg  [3:0] l0_basex_r,                    l0_basex_next;        // [1:0] MAPBASE[9:8], [3:2] TILEBASE[9:8]
+    reg        regwin_hi_r,                   regwin_hi_next;       // CTRL816.REGWIN (VERA816.md 4.4): 1 = PSG/palette/sprite-attr windows at $7F9C0
     reg  [3:0] l1_basex_r,                    l1_basex_next;
 
     // VERA816 blitter bank, DCSEL=33 (doc/VERA816.md "The blitter"):
@@ -255,6 +256,7 @@ module top(
                 6'd2: rddata = {fx_transparency_enabled, fx_cache_write_enabled, fx_cache_fill_enabled, fx_one_byte_cache_cycling, fx_16bit_hop, fx_4bit_mode, fx_addr1_mode};
                 6'd32: rddata = {4'b0, vera816_addrx_r};                  // VERA816 ADDRX
                 6'd33: rddata = {4'b0, blt_idx_r};                        // VERA816 BLT_IDX
+                6'd34: rddata = {7'b0, regwin_hi_r};                      // VERA816 CTRL816
                 default: rddata = 8'h56; // 'V'
             endcase
         end
@@ -392,6 +394,7 @@ module top(
         vram_addr_select_next            = vram_addr_select_r;
         dc_select_next                   = dc_select_r;
         l0_basex_next                    = l0_basex_r;
+        regwin_hi_next                   = regwin_hi_r;
         l1_basex_next                    = l1_basex_r;
         blt_idx_next                     = blt_idx_r;
         fpga_reconfigure_next            = fpga_reconfigure_r;
@@ -498,6 +501,8 @@ module top(
                         dc_active_hstart_next[1:0] = 0;
                     end else if (dc_select_r == 6'd33) begin
                         blt_idx_next               = write_data[3:0];  // VERA816 BLT_IDX
+                    end else if (dc_select_r == 6'd34) begin
+                        regwin_hi_next             = write_data[0];    // VERA816 CTRL816.REGWIN
                     end
                     // else: ignore (no-op for other DCSEL values)
                 end
@@ -647,6 +652,7 @@ module top(
             l0_map_width_r                <= 0;
             l0_map_baseaddr_r             <= 0;
             l0_basex_r                    <= 0;
+            regwin_hi_r                   <= 0;
             l1_basex_r                    <= 0;
             blt_idx_r                     <= 0;
             l0_tile_baseaddr_r            <= 0;
@@ -679,6 +685,7 @@ module top(
             vram_addr_select_r            <= vram_addr_select_next;
             dc_select_r                   <= dc_select_next;
             l0_basex_r                    <= l0_basex_next;
+            regwin_hi_r                   <= regwin_hi_next;
             l1_basex_r                    <= l1_basex_next;
             blt_idx_r                     <= blt_idx_next;
             fpga_reconfigure_r            <= fpga_reconfigure_next;
@@ -755,6 +762,7 @@ module top(
 
         .vram_addr_select(vram_addr_select_r),
         .dc_select(dc_select_r),
+        .regwin_hi(regwin_hi_r),
 
         .vera816_addrx(vera816_addrx_r),
         .vram_addr_0(vram_addr_0_r),
@@ -1094,8 +1102,32 @@ module top(
         .composer_rd_data(spr_lb_rddata),
         .composer_erase_start(spr_lb_erase_start));
 
+    // VERA816: the PSG / palette / sprite-attribute windows live at the top of
+    // the ORIGINAL 128 KB ($1F9C0-$1FFFF), so their decodes must qualify bits
+    // [18:17] -- the [16:0] patterns alone would make $3FA00 a second palette
+    // and $3FC00 a second sprite-attribute file, which the emulator (comparing
+    // full 19-bit addresses) does not do.  addr_data.v qualifies its READ side
+    // the same way.
+    //
+    // This is not hypothetical.  A 640x480 8bpp framebuffer is 307,200 bytes
+    // and cannot be placed inside 352 KB without covering $3F9C0-$3FFFF, so an
+    // ordinary paint rewrites the palette from its own pixels partway down the
+    // screen -- and the picture simply comes up in the wrong colours, which
+    // looks nothing like an address bug.  Found by examples/vera/scanout.c,
+    // which probes exactly this before it paints (VERA816.md 2.2).
+    //
+    // CTRL816.REGWIN (VERA816.md 4.4) relocates the windows to the same [16:0]
+    // offsets at the TOP of the 512 KB space ($7F9C0-$7FFFF, inside the
+    // unpopulated region), freeing the whole 352 KB as plain VRAM -- no
+    // 640x480 framebuffer fits without crossing the stock position, which is
+    // why the bit exists.  Only this bank qualifier moves; the patterns stay.
+    // Relocated windows are WRITE-ONLY: stock readback was only ever the VRAM
+    // shadow underneath the window, and under the high position there is no
+    // memory, so reads there follow the section 3 hole rule (return $00).
+    wire        ib_addr_winbank = ib_addr_r[18:17] == (regwin_hi_r ? 2'b11 : 2'b00);
+
     // Sprite attribute RAM
-    wire        sprite_attr_write  = (ib_addr_r[16:10] == 'b1111111) && ib_do_access_r && ib_write_r;
+    wire        sprite_attr_write  = ib_addr_winbank && (ib_addr_r[16:10] == 'b1111111) && ib_do_access_r && ib_write_r;
     wire  [7:0] sprite_attr_wraddr = ib_addr_r[9:2];
     wire [31:0] sprite_attr_wrdata = {4{ib_wrdata_r}};
 
@@ -1182,7 +1214,7 @@ module top(
     //////////////////////////////////////////////////////////////////////////
     wire [15:0] palette_rgb_data;
 
-    wire        palette_write   = (ib_addr_r[16:9] == 'b11111101) && ib_do_access_r && ib_write_r;
+    wire        palette_write   = ib_addr_winbank && (ib_addr_r[16:9] == 'b11111101) && ib_do_access_r && ib_write_r;
     wire  [1:0] palette_bytesel = ib_addr_r[0] ? 2'b10 : 2'b01;
     wire  [7:0] palette_wridx   = ib_addr_r[8:1];
     wire [15:0] palette_wrdata  = {2{ib_wrdata_r}};
@@ -1356,7 +1388,7 @@ module top(
     //////////////////////////////////////////////////////////////////////////
     // Audio  (2026-06-21: restored after stub-out for the "Hello X16" build.)
     //////////////////////////////////////////////////////////////////////////
-    wire audio_write = (ib_addr_r[16:6] == 'b11111100111) && ib_do_access_r && ib_write_r;
+    wire audio_write = ib_addr_winbank && (ib_addr_r[16:6] == 'b11111100111) && ib_do_access_r && ib_write_r;
 
     audio audio(
         .rst(reset),

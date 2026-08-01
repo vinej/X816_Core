@@ -94,6 +94,30 @@ which held the *other* sprite, so the screen looked plausible. `sim/run.sh
 lint` now fails on any such width mismatch, and the second bitstream renders
 the test's high sprite from above 128 KB correctly.
 
+That left one path untested — the tile layers, which shared the fix but had
+never displayed anything above 128 KB — and the test for it, §8 test 5, had
+never been written. It is written now: `RUN SCANOUT.BIN` puts up a **640×480
+8bpp** picture, the mode the whole 352 KB exists for, as eight colour bands
+whose bottom half is fetched from above 128 KB — white, red, cyan, purple,
+green, blue, yellow, orange, **green on a DE10-Nano** as well as on the
+emulator, with a negative control. Writing it turned up a second
+RTL-only bug in the same neighbourhood — the palette, sprite-attribute and PSG
+*write* decodes ignored address bits [18:17], so `$3FA00` was a second palette
+sitting inside any 640×480 framebuffer. See [doc/VERA816.md](doc/VERA816.md)
+§2.2, which is also why that mode needs the blitter and not just wants it —
+the ~2.5 black rows that flash through the purple band while it paints are
+that window, waiting for the blitter to fill what the CPU may not.
+
+That dependency is now optional. **`CTRL816.REGWIN`** (§4.4, DCSEL 34)
+relocates the PSG/palette/sprite-attribute windows to `$7F9C0-$7FFFF`, inside
+the unpopulated region, after which the whole 352 KB is plain VRAM: a real
+program sets one bit and paints 640×480 like any other picture — including
+double-buffered 640×480 4bpp and 640×240 8bpp, which fill the 352 KB exactly.
+Opt-in, reset = stock, both implementations, conformance-tested with a
+negative control — and **green on a DE10-Nano**: `RUN REGWIN.BIN` comes up
+blue with one sprite, and `RUN SCANFULL.BIN` draws the same 640×480 picture as
+`SCANOUT.BIN` with the CPU alone, without the black gap (§8 test 8).
+
 The FAT32 writer is verified against **pyfatfs**, an independent
 implementation, rather than against this project's own reader. Two halves
 agreeing proves that they agree, not that either is right.

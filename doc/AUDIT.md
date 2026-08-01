@@ -342,6 +342,11 @@ came back green with the blitter working and the sprite half wrong, the
 second (bitstream 14:18) came back fully green. The final state is that every
 finding here is closed, with one honest residual named at the end of H-3.
 
+Later the same day that residual was closed by writing the test that had never
+existed — and writing it produced **H-4**, a second RTL-only divergence in the
+same neighbourhood. One further hardware round confirmed both. Every finding
+in this document is now closed, and no residual is named.
+
 ### H-3 (found on hardware 2026-08-01, after the audit): the VERA816 widening
 ### never reached the display side
 
@@ -378,6 +383,42 @@ which is a good reason to expect them to work and not evidence that they do —
 VERA816.md §8 test 5 (a 640×480 8bpp scanout past line 204) is still
 unimplemented, and it is the test that covers them.
 
+**CLOSED, 2026-08-01 — on hardware.** Test 5 now exists as
+`examples/vera/scanout.c` + `run-scanout.sh`, ships on the demo card as
+`SCANOUT.BIN`, and a DE10-Nano displays all eight bands in order: white, red,
+cyan, purple, green, blue, yellow, orange. Bands 4–7 are fetched entirely from
+above 128 KB. Layer 0 is now proved above 128 KB by the same standard the
+sprite renderer was, and the 352 KB is proved end to end for the mode it exists
+for. The residual named above is gone.
+
+### H-4 (found by writing test 5): the register-window write decodes ignored
+### address bits [18:17]
+
+`top.v`'s `palette_write`, `sprite_attr_write` and `audio_write` matched
+`ib_addr_r[16:0]` patterns with no qualifier on bits `[18:17]`, so `$3FA00`
+was a second palette, `$3FC00` a second sprite-attribute file and `$3F9C0` a
+second PSG. `addr_data.v` already qualified the READ side and its comment
+names this exact divergence — the write side had simply not been done.
+
+It matters because a 640×480 8bpp framebuffer covers `$3F9C0-$3FFFF` no matter
+where it is based (VERA816.md §2.2), so an ordinary paint rewrites the palette
+from its own pixels partway down the screen. The emulator, comparing full
+19-bit addresses, was correct throughout, so this was RTL-only — the same
+skew direction as H-3, and again invisible to every test that existed.
+
+Fixed by one `ib_addr_lo128k` qualifier on all three. `sim/run.sh lint` still
+passes; the decode itself is not width-checkable, so `scanout.c` probes
+`$3FA02` and `$3FC00` before it paints and fails with its own colour.
+
+**Confirmed on hardware 2026-08-01**, and the confirmation is free: an unfixed
+bitstream fails that probe and paints the screen grey, so the fact that the
+board showed the eight bands at all is the evidence. One round closed both
+this and the H-3 residual.
+
+**Not a truncation this time, and worth noticing why it was missed anyway:**
+H-3 was found by hardware and H-4 by *writing the missing test*, before it ever
+ran on hardware. Both were sitting in code the audit read.
+
 | Finding | Disposition |
 |---|---|
 | H-1 kernel residency | **FIXED.** Kernel is a firmware image at `$F0:0000` (`runtime/x816-kernel.scm`, `kernel.bin` → `boot2.rom`, ioctl `16'h0080`), write-protected in RTL (`x816.sv` `fw_region`), boot checks firmware magic first (`boot/boot.s`), thunks context-switch (`kerntab.s` `KENTER`, `-DKERNEL_RESIDENT`), the resident image installs the table (`kernelmain.c`), `K_EXEC`/`K_EXIT` implemented (`kexec.c`, guarded firmware re-entry), goshell re-enters firmware on ESC, program maps honour the `$2000-$2FFF` claim. Proven: `sim/run.sh fw` (+ write-protect probe), `run-fwboot.sh` (+ corrupted-magic negative), full regression suite. |
@@ -398,7 +439,8 @@ unimplemented, and it is the test that covers them.
 | L-8 bank0_ram declare-before-use | **FIXED** (first pass). |
 | Doc drift table (7 rows) | **ALL FIXED** (MEMORY_MAP SD section, PORTING VERA/SMC rows, KERNEL/SHELL headers, mksdcard comment, Calypsi README, shell size comments). |
 | Contract duplication | **OPEN by choice**: a generator single-sourcing the constants across the three repos is real tooling work and was deliberately not bundled with this behaviour-heavy pass. `kexec.c`/`goshell.c` note their duplicated constants. Recommended next hygiene task, together with the build-recipe include. |
-| Coverage gaps (§4 ❌ rows) | `run`/exec/goshell: **covered** for the firmware path (`run-fwboot.sh`, `sim fw`); ESC-cycle end-to-end still needs an `-autokeys` raw-keynum extension. sd_block RTL + SMC chain: Phase 2/3 of SIMULATION.md, unchanged. |
+| H-4 register-window write aliasing | **FIXED** (`top.v` `ib_addr_lo128k` on `palette_write` / `sprite_attr_write` / `audio_write`), RTL-only — the emulator was already correct. Found by writing test 5, not by running it. **Green on a DE10-Nano**: `scanout.c` preflight 4 probes `$3FA02`/`$3FC00` and paints grey if the alias is there, so the picture coming up at all is the proof. |
+| Coverage gaps (§4 ❌ rows) | `run`/exec/goshell: **covered** for the firmware path (`run-fwboot.sh`, `sim fw`); ESC-cycle end-to-end still needs an `-autokeys` raw-keynum extension. VERA816 §8 test 5: **covered and GREEN ON HARDWARE** (`examples/vera/run-scanout.sh` + `SCANOUT.BIN` on the card, emulator-green with a negative control) — this was the last ❌ that mattered. sd_block RTL + SMC chain: Phase 2/3 of SIMULATION.md, unchanged. |
 
 New since the audit (same pass): the VERA816 **blitter** (`blit816.v`,
 DCSEL-33, VERA816.md §4.3, `sim/run.sh blit` green) per

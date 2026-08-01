@@ -34,6 +34,7 @@ limited" is the §4.3 blitter rather than more memory, is analysed in
 
 ```
 $00000-$4AFFF   307,200 B  640x480 8bpp framebuffer
+  $1F9C0-$1FFFF   1,600 B    ... crossed by VERA's register windows — see §2.2
 $4B000-$57FFF    53,248 B  tilemaps, tile data, sprite data
                  -------
                  360,448 B = 352 KB populated
@@ -50,6 +51,55 @@ fetches are random-access at roughly 160 scattered accesses per scanline, which
 is why VERA's own hardware uses on-chip SPRAM and why the X16's VERA2 had to be
 a line-prefetch streaming engine rather than a memory. Anything random-access
 must stay in this window.
+
+### 2.2 The framebuffer crosses the register windows — normative
+
+Stock VERA puts the PSG, palette and sprite-attribute files inside the CPU
+data port's view of VRAM:
+
+| Range | Contents |
+|---|---|
+| `$1F9C0-$1F9FF` | PSG registers (write-only) |
+| `$1FA00-$1FBFF` | palette |
+| `$1FC00-$1FFFF` | sprite attributes |
+
+**A 640×480 8bpp framebuffer cannot avoid them.** It needs 307,200 contiguous
+bytes; the largest clear runs in the 352 KB are `$00000-$1F9BF` (129,472 B) and
+`$20000-$57FFF` (229,376 B). Every legal TILEBASE placement — 2048-byte
+aligned, base ≤ `$0D000` for the picture to fit — therefore spans
+`$1F9C0-$1FFFF`. For the `$00000` base above, that is **lines 202–204**, 1,600
+bytes, two and a half scanlines sitting exactly at the 128 KB boundary.
+
+Three rules follow, and all three are normative:
+
+1. **The CPU data port must not be used to paint those 1,600 bytes.** A store
+   there writes VRAM *and* the window it decodes to, so painting through it
+   rewrites the palette from the picture's own pixels. Software wanting an
+   uncorrupted 640×480 must skip the range.
+2. **The blitter (§4.3) must be used instead, and can be.** Its traffic goes
+   through its own `vram_if` port and never touches the PSG/palette/sprite
+   shadows — those are written only by the external-bus decode in `top.v`.
+   This is the only way to put pixels in the window band, and it is why the
+   blitter is a dependency of the 640×480 mode rather than merely a speed-up.
+3. **The window decodes must test the full 19-bit address.** They match
+   `[16:0]` patterns, so without an explicit `addr[18:17] == 0` qualifier
+   `$3FA00` is a second palette and `$3FC00` a second sprite-attribute file —
+   both inside the framebuffer, so an ordinary paint would corrupt the palette
+   partway down the screen. The picture then comes up in the wrong colours,
+   which looks nothing like an addressing fault.
+
+Rule 3 held on the read side (`addr_data.v` `vram_addr_lo128k`) and **did not
+hold on the write side** (`top.v` `palette_write`, `sprite_attr_write`,
+`audio_write`) until 2026-08-01; the emulator, which compares full absolute
+addresses, was correct throughout. `examples/vera/scanout.c` probes `$3FA02`
+and `$3FC00` before it paints, so the divergence cannot come back silently.
+
+**The escape hatch — §4.4.** Everything above describes the reset state.
+Setting `CTRL816.REGWIN` relocates all three windows to `$7F9C0-$7FFFF`,
+inside the unpopulated region, after which rules 1 and 2 do not apply: the
+whole 352 KB is plain VRAM, the CPU port may paint every byte of it, and the
+blitter goes back to being a speed-up rather than a dependency. A program
+that draws 640×480 should set the bit first and skip the choreography.
 
 ## 3. The unpopulated region — normative
 
@@ -81,6 +131,7 @@ DCSEL allocation in the base design:
 | 7-62 | unused |
 | **32** | **VERA816 extensions** |
 | **33** | **VERA816 blitter** (§4.3) |
+| **34** | **VERA816 control** (§4.4) |
 | 63 | **version registers** `DC_VER0-3` — reads return the VERA version string |
 
 DCSEL **32** (`6'h20`) is used. Note that 63 is *not* free despite looking
@@ -194,6 +245,56 @@ Speed (RTL): FILL sustains a 32-bit word per granted slot on aligned runs
 co-aligned, else byte writes backed by a cached source word. A full 640×480
 8bpp frame fills in ~3 ms and copies in ~6 ms of idle slots.
 
+### 4.4 `CTRL816` — DCSEL 34, normative
+
+| Address | Name | Bits |
+|---|---|---|
+| `$9F29` | `CTRL816` | `[0]` = `REGWIN`, `[7:1]` reserved: write 0, read 0 |
+| `$9F2A-$9F2C` | — | reserved. Reads currently return the version bytes; do not rely on this. Writes are ignored. |
+
+`CTRL816` powers up to `$00`. Detection: on a core with this bank, `CTRL816`
+reads `$00` at reset; on an older VERA816 the same read falls through to the
+version string and returns `$56` (`'V'`). Write 1 and read it back to be sure.
+
+**`REGWIN` = 0** (reset): stock behaviour, exactly as before this section
+existed. The PSG/palette/sprite-attribute windows decode at `$1F9C0-$1FFFF`, a
+write there lands in **both** VRAM and the register file, and a read returns
+the VRAM shadow underneath.
+
+**`REGWIN` = 1**: the three windows decode at **`$7F9C0-$7FFFF`** instead —
+the same `[16:0]` offsets (PSG `$7F9C0-$7F9FF`, palette `$7FA00-$7FBFF`,
+sprite attributes `$7FC00-$7FFFF`), relocated to the top of the 512 KB space,
+inside the §3 unpopulated region where they collide with nothing. Normative
+consequences:
+
+* **`$1F9C0-$1FFFF` becomes plain VRAM through every path** — data ports,
+  FX, blitter. This is the point: with the windows out of the way, §2.2's
+  rules 1 and 2 do not apply, the CPU port may paint the whole framebuffer,
+  and the entire 352 KB is ordinary memory. It is what makes double-buffered
+  640×480 4bpp and 640×240 8bpp (which fill the 352 KB **exactly**, to the
+  byte) writable like any other picture.
+* **The relocated windows are write-only.** A read at `$7F9C0-$7FFFF` returns
+  `$00` — the §3 hole rule, unchanged. Stock-position readback was only ever
+  the VRAM shadow underneath the window, and under the high position there is
+  no memory; keep a shadow in CPU RAM if you need one (the PSG always
+  required this anyway).
+* **Switching moves no data.** Palette, sprite-attribute and PSG state keep
+  their contents; the VRAM at `$1F9C0-$1FFFF` keeps whatever the stock-mode
+  shadow writes left there. The renderers are unaffected by the bit in both
+  positions — they read their own RAMs, never these windows.
+* The FX niceties gated off window addresses (nibble writes, cache,
+  transparency — `addr_data.v`) follow the windows: available on the freed
+  `$1F9C0-$1FFFF`, suppressed on `$7F9C0-$7FFFF`.
+
+Both implementations must honour the bit identically; §8 test 8 asserts it.
+
+**GREEN ON HARDWARE**, DE10-Nano, 2026-08-01. `RUN REGWIN.BIN` goes white →
+blue → blue with a single yellow sprite near the top left: the relocated
+`$7FA02` reached the palette, the stock `$1FA02` write that followed did not,
+and a sprite programmed entirely through `$7FC08` rendered while the stock
+`$1FC10` slot stayed inert. The freed range is ordinary VRAM on real silicon,
+which is what the 352 KB needed to be worth having.
+
 ## 5. The bitmap line-address truncation — the actual blocker
 
 `graphics/layer_renderer.v` line 197:
@@ -299,11 +400,38 @@ recovered without dropping FX.
 > hardware 2026-08-01** (tests 6–7 below); `sim/run.sh lint` now fails on any
 > such truncation.
 >
-> **Test 5 is still not implemented, and is now the only untested path.**
-> Sprites proved a renderer can fetch above 128 KB, and the tile layers share
-> that fix and that arbiter — but "share the fix, so presumably fine" is the
-> reasoning that caused this episode. A 640×480 8bpp scanout is the reason the
-> 352 KB exists, and nothing has displayed one yet.
+> **Test 5 now exists and is GREEN ON HARDWARE**, DE10-Nano, 2026-08-01
+> (`examples/vera/scanout.c`, `run-scanout.sh`, `RUN SCANOUT.BIN` from the demo
+> card). It paints 640×480 8bpp as eight 60-line colour bands, reads the
+> framebuffer back through the data port before it will trust the screen, and
+> the runner checks all 480 lines of the last GIF frame against the band rule —
+> "line 205 must differ from line 0" is one case of it. Green on the emulator
+> with a negative control, and the board shows the eight bands in order:
+> **white, red, cyan, purple, green, blue, yellow, orange**. Bands 4–7 are
+> fetched entirely from above 128 KB. **The 352 KB is now proved end to end on
+> silicon for the mode it exists for.**
+>
+> **Expected while it paints:** a ragged black gap about 2.5 rows tall opens in
+> the middle of the purple band and closes at the end. That is the §2.2 window
+> band — skipped by the data port, filled by the blitter afterwards — and it
+> sits exactly on the 128 KB boundary at line 204.8. `SCANFULL.BIN`, the same
+> test with §4.4's `REGWIN` set, shows **no gap at all** — confirmed on a
+> DE10-Nano, 2026-08-01 — because with the windows relocated there is nothing
+> to paint around. Run the two back to back: same eight bands, one painted in
+> a single sweep by the CPU and one choreographed around the register windows.
+> That pair is the clearest statement of what §4.4 buys, and `SCANOUT.BIN`
+> keeps the stock path covered because `REGWIN` resets to 0.
+>
+> Writing it found two things nothing else had. §2.2 is the first: no 640×480
+> framebuffer can avoid VERA's register windows, the CPU port must not paint
+> that band and the blitter must. The second is that `top.v`'s palette,
+> sprite-attribute and audio *write* decodes ignored address bits [18:17], so
+> `$3FA00` aliased onto the palette — inside the framebuffer, so the first run
+> of this test repainted the palette with its own pixels and came up a uniform
+> `$0404`. Fixed the same day; the test probes for it before painting, and
+> **that probe passing on the board is what confirms the fix** — an unfixed
+> bitstream fails preflight 4 and paints grey, so a screen with bands on it
+> is itself the evidence.
 
 Both implementations must pass identically before any application software is
 written against VERA816.
@@ -318,13 +446,32 @@ written against VERA816.
 4. **Address wrap.** Auto-increment across `$7FFFF` wraps to `$00000`.
 5. **Bitmap scanout.** 640×480 8bpp with a per-line colour ramp; **line 205
    must differ from line 0.** This is the specific regression §5 fixes and is
-   the one test that catches a truncation mismatch.
+   the one test that catches a truncation mismatch. It also covers §2.2: the
+   band at `$1F9C0-$1FFFF` must be painted by the blitter, and a store to
+   `$3FA02`/`$3FC00` must leave the palette and sprite attributes alone.
+   `examples/vera/scanout.c` + `run-scanout.sh` (`--negative` flattens the
+   ramp, so line 205 stops differing from line 0 and the check must fire).
 6. **Sprite reach (§5.1).** A sprite whose attribute address points above
    128 KB (bits [5:4] of byte 1 non-zero) renders the pixels stored there; the
    same attribute with those bits zero renders from the low copy.
 7. **Blitter (§4.3).** ID reads `$B6`; fill and copy at every alignment;
    `LEN=0` no-op; wrap at `$7FFFF`; hole semantics; pointer readback;
    busy polling.
+8. **Register-window relocation (§4.4).** `CTRL816` reads 0 at reset and
+   reads back a written 1. With `REGWIN` set: a palette write at the stock
+   `$1FA02` must **not** change a displayed colour (the address is plain
+   VRAM now); the same write at `$7FA02` must; `$7FA02` reads back `$00`
+   (write-only); a sprite programmed entirely through the `$7FC00` window
+   renders. `examples/vera/regwin.c` + `run-regwin.sh` (`--negative` leaves
+   `REGWIN` clear, so the stock-address write must repaint the screen and
+   the relocated one must not — proving the checks can fail).
+   Test 5 also runs a second time with `REGWIN` set
+   (`run-scanout.sh --regwin`, shipped as `SCANFULL.BIN`): the same 480
+   lines, painted entirely by the data port with the blitter never invoked.
+   Its negative control (`--regwin-negative`) writes 0 to `CTRL816` and
+   paints straight through anyway — the live windows then rewrite the
+   palette from the picture's own pixels and **all 480 lines come out
+   wrong**, which is what makes the positive run mean something.
 
 > **Status of 6 and 7: GREEN ON HARDWARE**, DE10-Nano, 2026-08-01, with the
 > 14:18 bitstream. `BLITTEST.BIN` paints green and shows one **white**

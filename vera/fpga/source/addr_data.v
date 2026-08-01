@@ -18,6 +18,7 @@ module addr_data(
 
     input wire         vram_addr_select,
     input wire   [5:0] dc_select,
+    input wire         regwin_hi,          // VERA816 CTRL816.REGWIN (VERA816.md 4.4): windows at $7F9C0 instead of $1F9C0
 
     output wire  [3:0] vera816_addrx,      // VERA816: {ADDR1[18:17], ADDR0[18:17]} for register readback
     output wire [18:0] vram_addr_0,
@@ -347,10 +348,15 @@ module addr_data(
     // Without this qualifier an address such as $39F00 would alias onto the
     // palette, which the emulator (comparing full absolute addresses) does not
     // do -- a silent RTL-only divergence.
-    wire vram_addr_lo128k             = (vram_addr[18:17] == 2'b00);
-    wire is_audio_address             = vram_addr_lo128k && (vram_addr[16:6]  == 'b11111100111);
-    wire is_palette_address           = vram_addr_lo128k && (vram_addr[16:9]  == 'b11111101);
-    wire is_sprite_attr_address       = vram_addr_lo128k && (vram_addr[16:10] == 'b1111111);
+    //
+    // CTRL816.REGWIN (VERA816.md 4.4) moves the windows to the same offsets at
+    // the top of the 512 KB space; the bank qualifier here must track top.v's
+    // ib_addr_winbank or the FX niceties gated below would apply to register
+    // windows (relocated) / be denied to plain VRAM (stock position freed).
+    wire vram_addr_winbank            = vram_addr[18:17] == (regwin_hi ? 2'b11 : 2'b00);
+    wire is_audio_address             = vram_addr_winbank && (vram_addr[16:6]  == 'b11111100111);
+    wire is_palette_address           = vram_addr_winbank && (vram_addr[16:9]  == 'b11111101);
+    wire is_sprite_attr_address       = vram_addr_winbank && (vram_addr[16:10] == 'b1111111);
 
     //////////////////////////////////////////////////////////////////////////
     // Calculation for X and Y accumulation
