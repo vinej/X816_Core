@@ -403,3 +403,76 @@ parameter is unambiguous under every variant: it is in `A`.
 
 Test 4 of `kerntest.c` is the negative control §8 asks for: it calls an
 unimplemented entry and fails unless carry comes back set with `KERR_NOSYS`.
+
+---
+
+## 11. Converting x16lib — where it has got to
+
+§2.3 decided which modules belong where; this is how far the work has run.
+Source of truth is X816_Library `src_acme/`, regenerated into X816_Calypsi
+`src/` by `tools/acme2calypsi.py`.
+
+### 11.1 One crossing, not ninety
+
+x16lib is 65C02 code and runs with A, X and Y eight bits wide. The ABI above is
+16-bit. `src_acme/system/x816kernel.asm` is the only file that crosses it —
+every converted module calls a `kern_*` routine there, and `rep`/`sep`/`jsl`
+appear nowhere else in the tree.
+
+That is not tidiness. A module that switches register width itself has to
+switch it back on **every** path including the error ones, and a missed `sep`
+does not crash: it leaves 65C02 code executing with 16-bit registers, reading
+and writing one byte too many, with the symptom appearing somewhere else
+entirely.
+
+The crossing file also contains **no 16-bit immediates**. `lda #$1234`
+assembles to a different length depending on the accumulator width, so an
+assembler must be told which is in force and emits the wrong length silently if
+that tracking drifts. Every value goes through zero page instead, where the
+addressing mode is identical either way.
+
+**Nothing survives in X or Y across a kernel call.** They carry ABI arguments.
+A 65C02 programmer holds a loop counter in X by reflex, and that is now a bug —
+it cost one test failure while writing `libfs.s`.
+
+### 11.2 Converted
+
+| Module | What changed |
+|---|---|
+| `core/const_kernel` | new — the `$00:FE00` entry numbers, replacing `const_kernal`'s `$FFxx` |
+| `system/x816kernel` | new — the 8-bit/16-bit crossing |
+| `storage/fileio` | rewritten on **handles**; the channel model is gone |
+| `storage/dir` | rewritten on `DIR_*`; the BASIC-listing parser is gone |
+| `core/sugar` | the `xm_fio_*` macros follow the handle model |
+| `ui/filepick` | its copy path — sixty lines of channel juggling became a read/write loop |
+| `input/input` | `key_get`/`key_wait` on `CON_GETKEY`/`CON_GETC` |
+| `video/screen` | `screen_puts` on `CON_PUTC` |
+
+What a caller notices: no device numbers, no secondary addresses, no logical
+file numbers, no `CHKIN`/`CHKOUT`/`CLRCHN`, and no `READST` — status is per
+call and per handle rather than a machine-wide byte describing whichever
+channel was last selected. `dir_next` now returns `.` and `..`; FAT32 has no
+file type, so everything that is not a directory reports `DIR_TYPE_PRG`. Keys
+arrive as **ASCII, not PETSCII** — the two agree on digits and punctuation and
+disagree on case, which is the way round that makes a bug quiet.
+
+Green in the emulator, both with a negative control:
+`X816_Calypsi/examples/kernel/run-libfs.sh` drives `fio_*` and `dir_*` over a
+real card and then has pyfatfs check what is on it;
+`examples/asm-lib/run-emu.sh` still passes, so the conversion did not disturb
+the rest of the tree.
+
+### 11.3 Not converted yet, and why
+
+| Module | Blocked on |
+|---|---|
+| `storage/load` | `LOAD`/`SAVE` with PRG headers, BASIC `SYS` stubs and VRAM loads through `LOAD`'s A register. The X816 answer is `EXEC` (§5.4) plus flat addresses, and `EXEC` is not implemented — this is a redesign, not a retarget. |
+| `storage/dos` | the DOS command channel: `"S:FILE"` strings sent to a drive. The native equivalents are `FS_DELETE`, `FS_RENAME`, `FS_MKDIR`, so the module's whole *interface* changes. |
+| `storage/bmx` | ~30 `CHRIN`/`READST` sites. Mechanical — `fio_getc` and `fio_read` are already there — but 942 lines, and it is a library either way (§2.3). |
+| `storage/bank`, `mem` | need `MEM_ALLOC`/`MEM_FREE`, which are still `k_nosys`. §2.3: reshaped into a plain allocator handing out 24-bit addresses, not ported. |
+| `system/irq`, `clock` | need `IRQ_SET` and the time source (§5.6). |
+
+`core/const_kernal.asm` is still sourced, so those five still assemble against
+the KERNAL symbols. Removing it is the last step, not the first: a build that
+had to choose between the two tables could not contain a module halfway
+between them.
