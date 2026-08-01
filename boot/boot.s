@@ -14,8 +14,10 @@
 ;   3. COPIES ITSELF into the RAM underneath the overlay, then drops the
 ;      overlay -- from that point bank 0 is 64 KB of uniform RAM, the vector
 ;      table lives in RAM and is patchable, and the machine is genuinely flat
-;   4. if a program with the "X816" magic is present at PROG_BASE, jumps to
-;      it and never returns -- the program runs in place from SDRAM
+;   4. if the kernel firmware carries the "X816" magic at $F0:0000, jumps to
+;      its entry ($F0:0004); else if a program with the magic sits at
+;      PROG_BASE, jumps to that -- either way the code runs in place from
+;      SDRAM (doc/KERNEL.md §7)
 ;   5. otherwise brings VERA up in 320x240 8bpp bitmap mode and paints
 ;      horizontal bands, a font-free proof that CPU, flat bus, I/O decode and
 ;      video all work, then parks in WAI
@@ -48,7 +50,10 @@ SYSCTL        = $9F80          ; bit 0: boot ROM overlay enable (1 at reset)
 ; not land there. The RTL's HPS loader adds this base to the file offset, so
 ; a program links at PROG_BASE+4 and loads from offset 0.
 PROG_BASE     = $010000
-; Magic at PROG_BASE is the four bytes "X816"; the entry point is PROG_BASE+4.
+; The kernel firmware region (doc/KERNEL.md §3): HPS-loaded as boot2.rom,
+; write-protected by the core. Checked before PROG_BASE.
+FW_BASE       = $F00000
+; Magic at either base is the four bytes "X816"; the entry point is base+4.
 
 .segment "BOOT"
 ; ----------------------------------------------------------------------------
@@ -79,27 +84,36 @@ reset:
 .a8
         stz     SYSCTL          ; overlay off -- bank 0 is now uniform RAM
 
-; ---- hand over to a loaded program, if there is one ------------------------
-; Programs live at PROG_BASE in SDRAM, not bank $00, so a load cannot trample
-; the direct page, the stack or this stub. The four-byte magic distinguishes
-; "a program was loaded" from "SDRAM powered up as noise" -- bank $00 is BRAM
-; and comes up zeroed, but banks $01+ do not.
+; ---- hand over: kernel firmware first, then a loaded program ---------------
+; Both bases are SDRAM: an absent image reads as power-up noise, and the
+; four-byte magic is what tells a loaded image from that noise (bank $00 is
+; BRAM and comes up zeroed; banks $01+ do not). The kernel wins when both are
+; present (doc/KERNEL.md §7 step 3); the PROG_BASE path is the pre-kernel
+; fallback every conformance image boots through, and stays.
 ;
-; Nothing is copied down: the program runs in place from SDRAM, which is the
-; normal case for a flat machine and exercises the CPU stall path.
-        lda     PROG_BASE+0
-        cmp     #'X'
+; Nothing is copied down: kernel and program alike run in place from SDRAM,
+; which is the normal case for a flat machine and exercises the CPU stall
+; path. The loops compare against this ROM's own copy of the string, so the
+; bytes checked and the bytes shipped cannot drift.
+        ldx     #0
+@fwchk: lda     f:FW_BASE,x
+        cmp     magic,x
+        bne     @no_fw
+        inx
+        cpx     #4
+        bne     @fwchk
+        jml     FW_BASE+4       ; kernel owns the machine
+
+@no_fw: ldx     #0
+@pgchk: lda     f:PROG_BASE,x
+        cmp     magic,x
         bne     no_prog
-        lda     PROG_BASE+1
-        cmp     #'8'
-        bne     no_prog
-        lda     PROG_BASE+2
-        cmp     #'1'
-        bne     no_prog
-        lda     PROG_BASE+3
-        cmp     #'6'
-        bne     no_prog
+        inx
+        cpx     #4
+        bne     @pgchk
         jml     PROG_BASE+4     ; long jump: sets PBR, program owns the machine
+
+magic:  .byte   "X816"
 
 ; ---- nothing loaded: paint the bring-up bands ------------------------------
 no_prog:
