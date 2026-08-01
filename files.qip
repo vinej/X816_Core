@@ -65,6 +65,7 @@ set_global_assignment -name VERILOG_FILE vera/fpga/source/main_ram.v
 set_global_assignment -name VERILOG_FILE vera/fpga/source/dpram.v
 set_global_assignment -name VERILOG_FILE vera/fpga/source/reset_sync.v
 set_global_assignment -name VERILOG_FILE vera/fpga/source/vram_if.v
+set_global_assignment -name VERILOG_FILE vera/fpga/source/blit816.v
 set_global_assignment -name VERILOG_FILE vera/fpga/source/sim/palette_ram.v
 set_global_assignment -name VERILOG_FILE vera/fpga/source/sim/sprite_ram.v
 set_global_assignment -name VERILOG_FILE vera/fpga/source/graphics/composer.v

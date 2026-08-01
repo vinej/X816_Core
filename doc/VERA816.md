@@ -15,9 +15,13 @@ VERA register keeps its address, layout and meaning.
 
 640×480 at 8bpp needs **307,200 bytes**. Stock VERA has 128 KB, which is why
 the Commander X16 core had to bolt on a separate SDRAM bitmap layer ("VERA2")
-at `$9F60`. X816 has M10K to spare — the X16 core sat at 550/553 RAM blocks,
-X816 at 282/553 — so the framebuffer goes in real VRAM instead, and VERA2
-stops being necessary.
+at `$9F60`. X816 had M10K to spare — the X16 core sat at 550/553 RAM blocks,
+X816 at 282/553 *before this widening* — so the framebuffer goes in real VRAM
+instead, and VERA2 stops being necessary. **The widening consumed the spare:**
+the fitted core now sits at ~507/553 RAM blocks, so 352 KB is also where VRAM
+stops. The BRAM-vs-VERA2 trade, and why the answer to "gaming is fill-rate
+limited" is the §4.3 blitter rather than more memory, is analysed in
+[VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md).
 
 ## 2. Address space
 
@@ -76,6 +80,7 @@ DCSEL allocation in the base design:
 | 2-6 | **VERA FX** (`addr_data.v` lines 629-764) |
 | 7-62 | unused |
 | **32** | **VERA816 extensions** |
+| **33** | **VERA816 blitter** (§4.3) |
 | 63 | **version registers** `DC_VER0-3` — reads return the VERA version string |
 
 DCSEL **32** (`6'h20`) is used. Note that 63 is *not* free despite looking
@@ -114,6 +119,13 @@ reads the address after crossing a 128 KB boundary.
 `L0_BASEX` and `L1_BASEX` *are* ordinary latches; only `ADDRX` has this
 property.
 
+**Write ADDRX before ADDR_L/M/H when setting up a read.** The data-port
+fetch-ahead refreshes on `ADDR_L/M/H` writes only (`addr_data.v`
+`fetch_ahead`), not on `ADDRX` — identically in both implementations — so an
+"L/M/H then ADDRX" order leaves the first `DATA0` read holding the byte from
+{old `[18:17]`, new low bits}. ADDRX-first costs nothing and is always
+correct.
+
 ### 4.2 Why MAPBASE and TILEBASE need two more bits each
 
 Current address arithmetic in `graphics/layer_renderer.v`:
@@ -133,6 +145,54 @@ wire [16:0] tile_addr = {tile_baseaddr, 7'b0} + tile_addr_xbpp;
 
 Granularity is unchanged: MAPBASE stays 512-byte aligned, TILEBASE stays
 2048-byte aligned (`top.v` forces `tile_baseaddr[1:0] = 0` on write).
+
+### 4.3 The blitter — DCSEL 33, normative
+
+VRAM-to-VRAM bulk fill and copy without the CPU's one-byte data port. It runs
+on a fifth, **lowest-priority** VRAM arbiter port (`blit816.v`,
+`vram_if.v` if4), so it can never disturb scanout: it consumes idle VRAM
+slots — all of them in blanking, the leftovers during active display.
+Rationale and the performance ladder: [VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md).
+
+With `DCSEL = 33`:
+
+| Address | Name | Behaviour |
+|---|---|---|
+| `$9F29` | `BLT_IDX` | R/W: index into the parameter file, 0-9 |
+| `$9F2A` | `BLT_DATA` | R/W: the indexed parameter byte. **A write auto-increments `BLT_IDX`; a read does not.** |
+| `$9F2B` | `BLT_CTRL` | W: bit 0 = start **COPY**, bit 1 = start **FILL**. R: bit 0 = **busy** |
+| `$9F2C` | `BLT_ID` | R: **`$B6`** — feature detect (stock VERA reads the version byte here) |
+
+Parameter file (all little-endian; addresses are 19-bit VRAM **byte**
+addresses, lengths in bytes):
+
+| Index | Field |
+|---|---|
+| 0-2 | `SRC` (`[18:16]` in the low bits of byte 2) |
+| 3-5 | `DST` |
+| 6-8 | `LEN` |
+| 9 | `VAL` — the FILL byte |
+
+Semantics, all normative:
+
+* Byte-granular: any `SRC`/`DST` alignment, any `LEN`. `LEN = 0` starts
+  nothing (busy never rises).
+* COPY is **ascending**. Overlap is defined only for `DST < SRC` or disjoint
+  ranges; the VERA2 "doubling" idiom (`DST = SRC + LEN`) is disjoint and is
+  the intended fast-fill pattern.
+* Addresses advance **modulo 512 KB**, matching the data-port auto-increment
+  wrap (§8 test 4). The unpopulated region behaves exactly as §3: writes
+  discarded, reads 0.
+* `SRC`/`DST`/`LEN` read back as the engine left them (`LEN = 0`, pointers
+  one-past-end) — the readable-pointer convention VERA2 established.
+* Parameter writes while busy are **ignored**. Poll `BLT_CTRL` bit 0.
+* Writes through the blitter are plain byte writes: no FX transparency, no
+  4-bit mode, no cache interaction.
+
+Speed (RTL): FILL sustains a 32-bit word per granted slot on aligned runs
+(~100 MB/s in blanking); COPY runs word-in/word-out when `SRC` and `DST` are
+co-aligned, else byte writes backed by a cached source word. A full 640×480
+8bpp frame fills in ~3 ms and copies in ~6 ms of idle slots.
 
 ## 5. The bitmap line-address truncation — the actual blocker
 
@@ -162,15 +222,38 @@ The lower colour depths (`2'd0`-`2'd2`) widen the same way. **Both
 implementations must widen identically** — a mismatch here shows up only past
 line 204 of an 8bpp bitmap.
 
+### 5.1 Sprite data above 128 KB — normative
+
+The layout in §2 puts sprite data at `$4B000+`, which stock sprite attributes
+cannot address: the attribute's 12-bit address field reaches
+`{addr,3'b0}` = 15 bits of 32-bit words = the first 128 KB only.
+
+VERA816 widens the field using two formerly reserved attribute bits.
+Sprite attribute byte 1 (offset 1 of the 8-byte record):
+
+| Bit | Stock VERA | VERA816 |
+|---|---|---|
+| 7 | mode (4/8 bpp) | unchanged |
+| 6 | reserved, write 0 | still reserved |
+| **5:4** | reserved, write 0 | **address bits `[18:17]`** (VRAM byte address) |
+| 3:0 | address `[16:13]` | unchanged |
+
+Granularity stays 32 bytes; software that writes the reserved bits as zero —
+which stock software must — sees exactly stock behaviour. RTL:
+`sprite_renderer.v` `sprite_attr_addr` is now `[13:0]`. The emulator must
+decode the same two bits identically.
+
 ## 6. RTL change list
 
 | File | Change |
 |---|---|
 | `vera/fpga/source/main_ram.v` | see §7 |
-| `vera/fpga/source/vram_if.v` | `if0_addr` 17→19 (CPU byte), `if1_addr`/`if2_addr`/`if3_addr` 15→17 (word) |
-| `vera/fpga/source/top.v` | `vram_addr_0_r`/`vram_addr_1_r` 17→19; DCSEL-32 decode; `l0/l1_map_baseaddr` and `l0/l1_tile_baseaddr` 8→10 bits |
+| `vera/fpga/source/vram_if.v` | `if0_addr` 17→19 (CPU byte), `if1_addr`/`if2_addr`/`if3_addr` 15→17 (word); **if4** = the blitter's lowest-priority R/W word port (§4.3) |
+| `vera/fpga/source/top.v` | `vram_addr_0_r`/`vram_addr_1_r` 17→19; DCSEL-32 decode; `l0/l1_map_baseaddr` and `l0/l1_tile_baseaddr` 8→10 bits; DCSEL-33 blitter bank + `blit816` instantiation |
+| `vera/fpga/source/addr_data.v` | `ADDRX` live-window bits, FX interaction with the 19-bit addresses (this row was missing from earlier revisions of this list) |
 | `vera/fpga/source/graphics/layer_renderer.v` | `bus_addr` 15→17; `map_addr`/`tile_addr` 15→17; §5 fix |
-| `vera/fpga/source/graphics/sprite_renderer.v` | `bus_addr` 15→17 |
+| `vera/fpga/source/graphics/sprite_renderer.v` | `bus_addr` 15→17; `sprite_attr_addr` 12→14 bits (§5.1) |
+| `vera/fpga/source/blit816.v` | **new** — the §4.3 blitter engine |
 
 ## 7. `main_ram.v` restructuring
 
@@ -216,18 +299,36 @@ written against VERA816.
 5. **Bitmap scanout.** 640×480 8bpp with a per-line colour ramp; **line 205
    must differ from line 0.** This is the specific regression §5 fixes and is
    the one test that catches a truncation mismatch.
+6. **Sprite reach (§5.1).** A sprite whose attribute address points above
+   128 KB (bits [5:4] of byte 1 non-zero) renders the pixels stored there; the
+   same attribute with those bits zero renders from the low copy. *(Status:
+   RTL widened 2026-08-01; emulator + test update pending — until this test
+   is green on both, do not place sprite data above 128 KB.)*
+7. **Blitter (§4.3).** ID reads `$B6`; fill and copy at every alignment;
+   `LEN=0` no-op; wrap at `$7FFFF`; hole semantics; pointer readback;
+   busy polling. *(Status: RTL green in `sim/run.sh blit` — eight
+   self-checking cases against the real arbiter and VRAM, 2026-08-01;
+   emulator implementation pending.)*
 
 ## 9. Explicitly unchanged
 
 * Every stock VERA register address, layout and reset value
-* Palette, sprite attribute RAM, line buffers, audio, SPI
+* Palette, sprite attribute RAM storage, line buffers, audio, SPI
 * VERA FX, and DCSEL 0-6
 * The `$9F20-$9F3F` window position in the X816 I/O page
-* Sprite and tile rendering semantics — only address widths change
+* Sprite and tile rendering semantics — only address widths change, plus the
+  two formerly reserved sprite-attribute bits §5.1 gives meaning to (zero =
+  stock behaviour)
 
 ## 10. Consequence for the core
 
-VERA816 makes the SDRAM bitmap layer (`bitmap_regs.sv`, `bitmap_engine.sv`,
-`$9F60`) unnecessary. It is listed as deferred item 4 in
-[PORTING.md](PORTING.md); with VERA816 in place it should be dropped rather
-than ported, along with the `FB_BASE_WORD` relocation problem it carries.
+VERA816 replaces the SDRAM bitmap layer ("VERA2": `bitmap_regs.sv`,
+`bitmap_engine.sv`, `$9F60`) for everything capacity was not the bottleneck
+for — and [VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md) shows capacity was
+never the gaming bottleneck; fill rate was, which the §4.3 blitter addresses
+in VRAM at higher speed than VERA2's SDRAM engine could. VERA2 is therefore
+**deferred, not dropped**: it becomes worth porting only when a concrete
+target needs double-buffered 640×480 **8bpp** or more than 352 KB of live
+pixel data, and the review lists what that port must include (burst SDRAM
+reads, a display-base register, the lane carve-out) before it is viable on
+X816's CPU-in-SDRAM architecture.

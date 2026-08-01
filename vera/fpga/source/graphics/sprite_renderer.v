@@ -70,7 +70,11 @@ module sprite_renderer(
     // Decode fields from sprite attributes
 
     // sprite_attr_sel_r=0
-    wire [11:0] sprite_attr_addr           = sprite_attr[11:0];
+    // VERA816: bits [13:12] (attribute byte 1 bits [5:4], reserved-as-zero on
+    // stock VERA) extend the sprite data address to the full 512 KB space --
+    // {addr,3'b0} below then forms a 17-bit word address. Granularity stays
+    // 32 bytes. See VERA816.md "Sprite data above 128 KB".
+    wire [13:0] sprite_attr_addr           = sprite_attr[13:0];
     wire        sprite_attr_mode           = sprite_attr[15];
     wire  [9:0] sprite_attr_x              = sprite_attr[25:16];
 
@@ -85,7 +89,7 @@ module sprite_renderer(
     wire  [1:0] sprite_attr_height         = sprite_attr[31:30];
 
     // Registers to hold attributes of sprite being rendered
-    reg  [11:0] sprite_addr_r;
+    reg  [13:0] sprite_addr_r;              // VERA816: widened with attr[13:12]
     reg         sprite_mode_r;
     reg   [9:0] sprite_x_r;
 

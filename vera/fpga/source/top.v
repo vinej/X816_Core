@@ -136,6 +136,15 @@ module top(
     wire [3:0] vera816_addrx_r;   // from addr_data: {ADDR1[18:17], ADDR0[18:17]}
     reg  [3:0] l0_basex_r,                    l0_basex_next;        // [1:0] MAPBASE[9:8], [3:2] TILEBASE[9:8]
     reg  [3:0] l1_basex_r,                    l1_basex_next;
+
+    // VERA816 blitter bank, DCSEL=33 (doc/VERA816.md "The blitter"):
+    // $9F29 BLT_IDX, $9F2A BLT_DATA (write auto-increments BLT_IDX),
+    // $9F2B BLT_CTRL/busy, $9F2C BLT_ID = $B6. Engine: blit816.v on the
+    // lowest-priority vram_if port.
+    localparam [7:0] VERA816_BLT_ID = 8'hB6;
+    reg  [3:0] blt_idx_r,                     blt_idx_next;
+    wire [7:0] blt_data_rddata;
+    wire       blt_busy;
     reg        fpga_reconfigure_r,            fpga_reconfigure_next;
     reg        irq_enable_vsync_r,            irq_enable_vsync_next;
     reg        irq_enable_line_r,             irq_enable_line_next;
@@ -245,6 +254,7 @@ module top(
                 6'd1: rddata = dc_active_hstart_r[9:2];
                 6'd2: rddata = {fx_transparency_enabled, fx_cache_write_enabled, fx_cache_fill_enabled, fx_one_byte_cache_cycling, fx_16bit_hop, fx_4bit_mode, fx_addr1_mode};
                 6'd32: rddata = {4'b0, vera816_addrx_r};                  // VERA816 ADDRX
+                6'd33: rddata = {4'b0, blt_idx_r};                        // VERA816 BLT_IDX
                 default: rddata = 8'h56; // 'V'
             endcase
         end
@@ -253,6 +263,7 @@ module top(
                 6'd0: rddata = dc_hscale_r;
                 6'd1: rddata = dc_active_hstop_r[9:2];
                 6'd32: rddata = {4'b0, l0_basex_r};                       // VERA816 L0_BASEX
+                6'd33: rddata = blt_data_rddata;                          // VERA816 BLT_DATA
                 default: rddata = VERA_VERSION_MAJOR;
             endcase
         end
@@ -262,6 +273,7 @@ module top(
                 6'd1: rddata = dc_active_vstart_r[8:1];
                 6'd5: rddata = fx_fill_length_low;
                 6'd32: rddata = {4'b0, l1_basex_r};                       // VERA816 L1_BASEX
+                6'd33: rddata = {7'b0, blt_busy};                         // VERA816 BLT_CTRL
                 default: rddata = VERA_VERSION_MINOR;
             endcase
         end
@@ -271,6 +283,7 @@ module top(
                 6'd1: rddata = dc_active_vstop_r[8:1];
                 6'd5: rddata = fx_fill_length_high;
                 6'd32: rddata = VERA816_VRAMCAP;                          // VERA816 VRAMCAP
+                6'd33: rddata = VERA816_BLT_ID;                           // VERA816 BLT_ID
                 default: rddata = VERA_VERSION_PATCH;
             endcase
         end
@@ -380,6 +393,7 @@ module top(
         dc_select_next                   = dc_select_r;
         l0_basex_next                    = l0_basex_r;
         l1_basex_next                    = l1_basex_r;
+        blt_idx_next                     = blt_idx_r;
         fpga_reconfigure_next            = fpga_reconfigure_r;
         irq_enable_audio_fifo_low_next   = irq_enable_audio_fifo_low_r;
         irq_enable_vsync_next            = irq_enable_vsync_r;
@@ -482,8 +496,10 @@ module top(
                     end else if (dc_select_r == 3'd1) begin
                         dc_active_hstart_next[9:2] = write_data;
                         dc_active_hstart_next[1:0] = 0;
+                    end else if (dc_select_r == 6'd33) begin
+                        blt_idx_next               = write_data[3:0];  // VERA816 BLT_IDX
                     end
-                    // else: ignore (no-op for DCSEL>=2)
+                    // else: ignore (no-op for other DCSEL values)
                 end
                 5'h0A: begin
                     if (dc_select_r == 3'd0) begin
@@ -493,7 +509,9 @@ module top(
                         dc_active_hstop_next[1:0] = 0;
                     end else if (dc_select_r == 6'd32) begin
                         l0_basex_next             = write_data[3:0];  // VERA816 L0_BASEX
-                    end
+                    end else if (dc_select_r == 6'd33) begin
+                        blt_idx_next              = blt_idx_r + 4'd1; // BLT_DATA write: auto-inc
+                    end                                               // (data lands in blit816)
                     // else: ignore (no-op for other DCSEL values)
                 end
                 5'h0B: begin
@@ -630,6 +648,7 @@ module top(
             l0_map_baseaddr_r             <= 0;
             l0_basex_r                    <= 0;
             l1_basex_r                    <= 0;
+            blt_idx_r                     <= 0;
             l0_tile_baseaddr_r            <= 0;
             l0_hscroll_r                  <= 0;
             l0_vscroll_r                  <= 0;
@@ -661,6 +680,7 @@ module top(
             dc_select_r                   <= dc_select_next;
             l0_basex_r                    <= l0_basex_next;
             l1_basex_r                    <= l1_basex_next;
+            blt_idx_r                     <= blt_idx_next;
             fpga_reconfigure_r            <= fpga_reconfigure_next;
             irq_enable_audio_fifo_low_r   <= irq_enable_audio_fifo_low_next;
             irq_enable_vsync_r            <= irq_enable_vsync_next;
@@ -791,6 +811,15 @@ module top(
     wire        spr_strobe;
     wire        spr_ack;
 
+    // VERA816 blitter <-> vram_if interface 4
+    wire [16:0] blt_vram_addr;
+    wire [31:0] blt_vram_wrdata;
+    wire  [7:0] blt_vram_wrnibblesel;
+    wire [31:0] blt_vram_rddata;
+    wire        blt_vram_write;
+    wire        blt_vram_strobe;
+    wire        blt_vram_ack;
+
     vram_if vram_if(
         .clk(clk),
 
@@ -824,7 +853,46 @@ module top(
         .if3_addr(spr_addr),
         .if3_rddata(spr_rddata),
         .if3_strobe(spr_strobe),
-        .if3_ack(spr_ack));
+        .if3_ack(spr_ack),
+
+        // Interface 4 - 32-bit read/write, lowest priority (VERA816 blitter)
+        .if4_addr(blt_vram_addr),
+        .if4_wrdata(blt_vram_wrdata),
+        .if4_wrnibblesel(blt_vram_wrnibblesel),
+        .if4_rddata(blt_vram_rddata),
+        .if4_write(blt_vram_write),
+        .if4_strobe(blt_vram_strobe),
+        .if4_ack(blt_vram_ack));
+
+    //////////////////////////////////////////////////////////////////////////
+    // VERA816 blitter (doc/VERA816.md "The blitter")
+    //////////////////////////////////////////////////////////////////////////
+    // Register strobes: do_write is the access FSM's single-cycle commit
+    // pulse, so the BLT_DATA auto-increment and the CTRL start bits fire
+    // exactly once per extbus write.
+    wire blt_data_we    = do_write && (access_addr == 5'h0A) && (dc_select_r == 6'd33);
+    wire blt_start_copy = do_write && (access_addr == 5'h0B) && (dc_select_r == 6'd33) && write_data[0];
+    wire blt_start_fill = do_write && (access_addr == 5'h0B) && (dc_select_r == 6'd33) && write_data[1];
+
+    blit816 blit816(
+        .rst(reset),
+        .clk(clk),
+
+        .reg_idx(blt_idx_r),
+        .reg_data_we(blt_data_we),
+        .reg_wrdata(write_data),
+        .reg_rddata(blt_data_rddata),
+        .start_copy(blt_start_copy),
+        .start_fill(blt_start_fill),
+        .busy(blt_busy),
+
+        .vram_addr(blt_vram_addr),
+        .vram_wrdata(blt_vram_wrdata),
+        .vram_wrnibblesel(blt_vram_wrnibblesel),
+        .vram_rddata(blt_vram_rddata),
+        .vram_write(blt_vram_write),
+        .vram_strobe(blt_vram_strobe),
+        .vram_ack(blt_vram_ack));
 
     //////////////////////////////////////////////////////////////////////////
     // Renderers

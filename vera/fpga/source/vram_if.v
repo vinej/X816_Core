@@ -39,7 +39,18 @@ module vram_if(
     input  wire [16:0] if3_addr,          // VERA816: 17-bit word address
     output wire [31:0] if3_rddata,
     input  wire        if3_strobe,
-    output reg         if3_ack);
+    output reg         if3_ack,
+
+    // Interface 4 - 32-bit read/WRITE, LOWEST priority (VERA816 blitter).
+    // Write data + nibble mask come ready-made from the engine; it only ever
+    // gets the RAM on cycles nothing above wants, so scanout is untouchable.
+    input  wire [16:0] if4_addr,
+    input  wire [31:0] if4_wrdata,
+    input  wire  [7:0] if4_wrnibblesel,
+    output wire [31:0] if4_rddata,
+    input  wire        if4_write,
+    input  wire        if4_strobe,
+    output reg         if4_ack);
 
     //////////////////////////////////////////////////////////////////////////
     // Main RAM 128kB (32k x 32)
@@ -65,6 +76,10 @@ module vram_if(
     reg if1_ack_next;
     reg if2_ack_next;
     reg if3_ack_next;
+    reg if4_ack_next;
+
+    // if4 owns the RAM only when nobody above strobes (blitter = idle slots)
+    wire if4_grant = if4_strobe && !if0_strobe && !if1_strobe && !if2_strobe && !if3_strobe;
 
     reg [1:0] byte_0_transparency_nibblesel;
     reg [1:0] byte_1_transparency_nibblesel;
@@ -75,7 +90,7 @@ module vram_if(
 
     reg [7:0] if0_wrdata_to_use;
 
-    assign ram_write  = if0_strobe && if0_write;
+    assign ram_write  = (if0_strobe && if0_write) || (if4_grant && if4_write);
 
     always @* begin
 
@@ -136,6 +151,13 @@ module vram_if(
             endcase
         end
 
+        // Blitter write path: overrides the if0-shaped defaults above on the
+        // cycles if4 actually holds the RAM (if0 idle by definition of grant).
+        if (if4_grant && if4_write) begin
+            ram_wrdata      = if4_wrdata;
+            ram_wrnibblesel = if4_wrnibblesel;
+        end
+
     end
 
     always @* begin
@@ -144,6 +166,7 @@ module vram_if(
         if1_ack_next = 1'b0;
         if2_ack_next = 1'b0;
         if3_ack_next = 1'b0;
+        if4_ack_next = 1'b0;
 
         if (if0_strobe) begin
             ram_addr     = if0_addr[18:2];
@@ -160,6 +183,10 @@ module vram_if(
         end else if (if3_strobe) begin
             ram_addr     = if3_addr;
             if3_ack_next = 1'b1;
+
+        end else if (if4_strobe) begin
+            ram_addr     = if4_addr;
+            if4_ack_next = 1'b1;
         end
     end
 
@@ -168,6 +195,7 @@ module vram_if(
         if1_ack <= if1_ack_next;
         if2_ack <= if2_ack_next;
         if3_ack <= if3_ack_next;
+        if4_ack <= if4_ack_next;
     end
 
     reg [1:0] if0_addr_r;
@@ -193,5 +221,6 @@ module vram_if(
     assign if1_rddata = ram_rddata;
     assign if2_rddata = ram_rddata;
     assign if3_rddata = ram_rddata;
+    assign if4_rddata = ram_rddata;
 
 endmodule
