@@ -101,6 +101,29 @@ whole 352 KB is plain VRAM, the CPU port may paint every byte of it, and the
 blitter goes back to being a speed-up rather than a dependency. A program
 that draws 640×480 should set the bit first and skip the choreography.
 
+### 2.3 What actually fits
+
+Framebuffer arithmetic against the 360,448 populated bytes, reserving the
+53,248 the tile/sprite region needs (§2.1). "Windows" is whether the picture
+can dodge `$1F9C0-$1FFFF` without §4.4's `REGWIN`.
+
+| mode | frame | single-buffered | double-buffered | windows |
+|---|---|---|---|---|
+| 640×480 8bpp | 307,200 | yes, 53,248 spare | **no** — 667,648 exceeds even the 512 KB address space | always crosses |
+| 640×480 4bpp | 153,600 | yes | **yes — 360,448 exactly, to the byte** | single: dodgeable at base `$20000`; double: one buffer crosses |
+| 640×240 8bpp | 153,600 | yes | **yes — exactly, same arithmetic** | as 4bpp; line-double with `DC_VSCALE` |
+| 640×480 2bpp | 76,800 | yes | yes, easily | dodgeable |
+
+Two consequences worth stating plainly:
+
+* **Double-buffered 640×480 8bpp is unreachable in any BRAM VERA** — it is not
+  a fitter limit but an address-space one. That is the case, and the only
+  case, for the VERA2 port [VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md)
+  defers.
+* **Tear-free 640×480 4bpp and 640×240 8bpp are available today**, which is
+  what makes §4.4 worth having: with `REGWIN` set both are plain memory and
+  page-flipping is a `TILEBASE` write.
+
 ## 3. The unpopulated region — normative
 
 Addresses `$58000-$7FFFF`:
@@ -323,6 +346,37 @@ The lower colour depths (`2'd0`-`2'd2`) widen the same way. **Both
 implementations must widen identically** — a mismatch here shows up only past
 line 204 of an 8bpp bitmap.
 
+### 5.0 It is not one limit, and it is not the same line in every mode
+
+Worth stating explicitly, because "the 128 KB limit" sounds like a single wall
+and is really three independent ones — only the first about memory size:
+
+1. **Capacity.** 128 KB of VRAM. §2.
+2. **This truncation.** The shift applied to `line_idx_mul5` differs per depth,
+   so the wrap line differs per depth — nothing to do with how much VRAM is
+   fitted.
+3. **The renderer↔arbiter wire widths.** AUDIT.md H-3, equal in every mode.
+
+For 640-wide bitmaps, stock VERA's 15-bit result truncates as:
+
+| depth | shift | stock wraps after | frame bytes | stock verdict |
+|---|---|---|---|---|
+| 1bpp | ≪2 | line 1638 — never | 38,400 | **worked** |
+| 2bpp | ≪3 | line 819 — never | 76,800 | **worked** |
+| 4bpp | ≪4 | **line 409** | 153,600 | broken twice: 70 lines short, and over 128 KB |
+| 8bpp | ≪5 | **line 204** | 307,200 | broken twice: 275 lines short, and over 128 KB |
+
+So stock VERA could display 640×480 at 1bpp and 2bpp only, and **both**
+high-colour modes failed for two independent reasons each — which is why more
+memory alone would never have fixed either. 320-wide 8bpp shifts by 4 and
+wraps after line 409, comfortably clear of 240 lines, which is why 320×240
+worked and hid the problem.
+
+VERA816 removes all three. §8 test 5 covers the 8bpp case on hardware; the
+4bpp path shares the same widened `bm_line_addr_tmp` and `l0_addr` and is
+**not independently tested**, which is the reasoning H-3 punished — a 4bpp
+variant of `scanout.c` is the cheap way to close that.
+
 ### 5.1 Sprite data above 128 KB — normative
 
 The layout in §2 puts sprite data at `$4B000+`, which stock sprite attributes
@@ -495,7 +549,15 @@ written against VERA816.
 
 * Every stock VERA register address, layout and reset value
 * Palette, sprite attribute RAM storage, line buffers, audio, SPI
-* VERA FX, and DCSEL 0-6
+* VERA FX, and DCSEL 0-6 — **with a consequence worth naming, because it is
+  the last surviving 128 KB limit.** `addr_data.v`'s `fx_map_base_address_r`
+  and `fx_tiledata_base_address_r` are 6 bits shifted left 11, so FX **affine
+  mode can only reach the first 128 KB**. FX's own `ADDR0`/`ADDR1` are full
+  19-bit, so line-draw, poly-fill and cache writes reach everywhere; only the
+  two affine base registers are narrow. This collides with a 640×480 8bpp
+  framebuffer, which occupies exactly that space. Lifting it needs two more
+  bits per base — an `FX_BASEX` in the DCSEL 32 bank, same shape as
+  `L0_BASEX` — and is therefore an amendment to this list, not a bug fix.
 * The `$9F20-$9F3F` window position in the X816 I/O page
 * Sprite and tile rendering semantics — only address widths change, plus the
   two formerly reserved sprite-attribute bits §5.1 gives meaning to (zero =
