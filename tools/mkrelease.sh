@@ -54,13 +54,49 @@ if [ -n "$SRC_STAMP" ] && [ "$SRC_STAMP" != "$STAMP" ]; then
     echo "         modified $STAMP; shipping it as X816_${STAMP}.rbf" >&2
 fi
 
+# ---- BUILD before packaging, and before destroying anything ----------------
+# Packaging used to copy whatever shell.bin happened to exist and trust that
+# someone had rebuilt it. They had not: a stale shell shipped three times --
+# a release missing the Shift key and half the commands, which looks like a
+# broken core rather than an old file.
+#
+# So build it here. A release is now correct by construction rather than by
+# anyone remembering, and the staleness check below is only a backstop for when
+# the toolchain is absent and an old binary is being reused deliberately.
+#
+# Done BEFORE `rm -rf`, so a failure leaves the previous good release intact --
+# refusing after the wipe turns a caught mistake into a worse one.
+SHELL_BIN="$CALYPSI/examples/shell/shell.bin"
+if [ -n "$CALYPSI" ] && [ -x "$CALYPSI/Calypsi/calypsi-65816-5.18/bin/cc65816" ]; then
+    echo "build  : $CALYPSI/examples/shell"
+    if ! (cd "$CALYPSI/examples/shell" && sh build.sh >/dev/null 2>&1); then
+        echo "REFUSING: the shell failed to build." >&2
+        echo "  run: sh $CALYPSI/examples/shell/build.sh   to see why." >&2
+        echo "  the existing release under releases/mister/ is untouched." >&2
+        exit 1
+    fi
+elif [ -n "$CALYPSI" ] && [ -f "$SHELL_BIN" ]; then
+    # No toolchain: fall back to whatever is there, but refuse it if the
+    # sources have moved on.
+    NEWER=$(find "$CALYPSI/runtime" "$CALYPSI/examples/shell" \
+                 \( -name '*.c' -o -name '*.h' -o -name '*.s' \) 2>/dev/null \
+            | while read -r f; do
+                  [ "$f" -nt "$SHELL_BIN" ] && echo "$f"
+              done)
+    if [ -n "$NEWER" ]; then
+        echo "REFUSING: no toolchain, and shell.bin is older than its sources:" >&2
+        echo "$NEWER" | sed 's|.*/|    |' >&2
+        echo "  the existing release under releases/mister/ is untouched." >&2
+        exit 1
+    fi
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT/_Computer" "$OUT/games/X816"
 
 cp "$RBF_SRC" "$OUT/_Computer/$RBF_DST"           || exit 1
 echo "core   : _Computer/$RBF_DST  ($(stat -c%s "$RBF_SRC") bytes)"
 
-SHELL_BIN="$CALYPSI/examples/shell/shell.bin"
 if [ -n "$CALYPSI" ] && [ -f "$SHELL_BIN" ]; then
     cp "$SHELL_BIN" "$OUT/games/X816/boot1.rom"   || exit 1
     echo "shell  : games/X816/boot1.rom       ($(stat -c%s "$SHELL_BIN") bytes)"

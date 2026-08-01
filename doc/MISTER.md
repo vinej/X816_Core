@@ -151,16 +151,23 @@ X816
 > RUN /DEMO/GREEN.BIN  load a program off the card and go
 ```
 
-The card is WRITABLE:
+The card is WRITABLE, **confirmed on a real MiSTer** -- create, write,
+truncate, delete, rename, mkdir and rmdir all run on the board, which means the
+SD block device's write command and the whole FAT32 write layer are exercised
+on hardware and not only in the emulator:
 
 ```
 > FILL 03:0000 20 5A
 > SAVE /PROGS/TEST.BIN 03:0000 20
-> LS /PROGS
-> RM /PROGS/TEST.BIN
+> DIR /PROGS
+> COPY /PROGS/TEST.BIN /PROGS/BACKUP.BIN
+> RENAME /PROGS/BACKUP.BIN OLD.BIN
+> DEL /PROGS/OLD.BIN
+> MKDIR /PROGS/SUB
+> RMDIR /PROGS/SUB
 ```
 
-`save` and `rm` do not ask for confirmation, matching `poke` and `fill`. The
+`save`, `del` and `copy` do not ask for confirmation, matching `poke` and `fill`. The
 FAT32 writer keeps every FAT copy in step and maintains the end-of-directory
 marker, so a card written here still reads correctly on a PC -- verified against
 pyfatfs rather than against our own reader.

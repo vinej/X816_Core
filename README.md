@@ -65,8 +65,21 @@ here, so the name is now derived from the bitstream rather than typed by hand.
 
 ## What it does today
 
-**Confirmed working on real hardware** (DE10-Nano) — both the bands bring-up
-demo and the VERA816 conformance test, matching the emulator.
+**X816 boots to its own prompt on a MiSTer, and reads and writes its own SD
+card.** Power on, pick the core from the Computer menu, type `HELP`.
+
+Confirmed on real hardware (DE10-Nano):
+
+| | |
+|---|---|
+| core | VERA816 conformance test, SDRAM, the bands bring-up demo |
+| console | 80x60 text, the SMC keyboard, Shift |
+| storage | FAT32 read **and write** - create, copy, rename, delete, mkdir, rmdir, from the prompt |
+| programs | `boot1.rom` auto-loads the shell at core start; `run` loads a program off the card and starts it |
+
+The FAT32 writer is verified against **pyfatfs**, an independent
+implementation, rather than against this project's own reader. Two halves
+agreeing proves that they agree, not that either is right.
 
 `sh boot/build.sh vramtest` builds a
 bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)

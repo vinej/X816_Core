@@ -54,15 +54,21 @@ ordinary code. Keep them separable; §6 depends on it.
 Deliberately small. Everything here is a thin wrapper over
 [KERNEL.md](KERNEL.md) §5.
 
+All of the file and directory commands below are **confirmed working on real
+MiSTer hardware**, not only in the emulator.
+
 **Files**
 
 | | |
 |---|---|
-| `ls [path]` | directory listing — `DIR_OPEN`/`DIR_NEXT` |
+| `ls [path]`, `dir [path]` | directory listing — `DIR_OPEN`/`DIR_NEXT`. Two names for one handler: an alias earns its own table row rather than a special case in the parser, so it inherits argument checking and shows up in `help` |
 | `cd path`, `pwd` | working directory |
 | `type file` | dump a file to the console |
-| `rm file` | delete a file |
-| `cp`, `mv`, `mkdir`, `rmdir` | not yet; `mkdir` needs a directory cluster with `.` and `..` |
+| `del file` | delete a file |
+| `copy src dst` | copy through a small buffer; the machine has no room to hold a whole file and no need to |
+| `rename old new` | rename in place. `new` is a bare name, not a path — moving between directories rewrites the entry elsewhere, which is a different operation. Works on directories too: only the name field changes, so the chain and the `.`/`..` entries are untouched |
+| `mkdir path` | create a directory. The new cluster is zeroed and seeded with its own `.` and `..`; a directory without them is unnavigable from inside. `..` stores cluster **0** when the parent is the root, which is how FAT32 spells it — writing the real root cluster number builds a tree `chkdsk` rejects |
+| `rmdir path` | remove an **empty** directory. Refusing a non-empty one is the invariant that stops every file inside being stranded, so it lives in the filesystem rather than the command |
 
 **Programs**
 
