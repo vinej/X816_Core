@@ -104,14 +104,16 @@ else
     echo "shell  : SKIPPED -- $SHELL_BIN not built" >&2
 fi
 
+# ALWAYS rebuild the card, never "only if missing". It carries the demo
+# binaries, so an existing image goes stale the moment the shell is rebuilt --
+# the same trap the shell itself fell into three times, and just as silent:
+# everything looks fine until /DEMO holds last week's programs.
 IMG="$CORE/releases/boot0.img"
-if [ ! -f "$IMG" ]; then
-    echo "card   : building releases/boot0.img"
-    python "$CORE/tools/mksdcard.py" "$IMG" >/dev/null 2>&1 || {
-        echo "card   : SKIPPED -- mksdcard.py failed (pip install pyfatfs)" >&2
-        IMG=""
-    }
-fi
+echo "card   : building releases/boot0.img"
+python "$CORE/tools/mksdcard.py" "$IMG" >/dev/null 2>&1 || {
+    echo "card   : SKIPPED -- mksdcard.py failed (pip install pyfatfs)" >&2
+    IMG=""
+}
 if [ -n "$IMG" ] && [ -f "$IMG" ]; then
     cp "$IMG" "$OUT/games/X816/boot0.img"         || exit 1
     echo "card   : games/X816/boot0.img       ($(stat -c%s "$IMG") bytes)"

@@ -68,6 +68,7 @@ TRY:
   CD DEMO
   LS
   RUN GREEN.BIN         PAINTS THE SCREEN GREEN
+  RUN CHARMAP.BIN       EVERY CP437 CHARACTER, WITH ITS HEX CODE
   DUMP 01:0000 40
 
 THE CARD IS WRITABLE:
@@ -97,6 +98,8 @@ DEMOS = [
     # Smallest possible proof that RUN works: paints green, touches nothing
     # else. First thing to try when a program will not start.
     ("GREEN.BIN",  os.path.join(CALYPSI, "examples", "shell", "greentest.bin")),
+    # Every CP437 glyph in a 16x16 grid, plus drawn boxes to show they join.
+    ("CHARMAP.BIN", os.path.join(CALYPSI, "examples", "shell", "charmap.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),
