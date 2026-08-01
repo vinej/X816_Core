@@ -69,6 +69,7 @@ TRY:
   LS
   RUN GREEN.BIN         PAINTS THE SCREEN GREEN
   RUN CHARMAP.BIN       EVERY CP437 CHARACTER, WITH ITS HEX CODE
+  RUN KERNTEST.BIN      KERNEL JUMP TABLE -- GREEN IS PASS
   DUMP 01:0000 40
 
 THE CARD IS WRITABLE:
@@ -100,6 +101,8 @@ DEMOS = [
     ("GREEN.BIN",  os.path.join(CALYPSI, "examples", "shell", "greentest.bin")),
     # Every CP437 glyph in a 16x16 grid, plus drawn boxes to show they join.
     ("CHARMAP.BIN", os.path.join(CALYPSI, "examples", "shell", "charmap.bin")),
+    # Kernel jump table conformance: green if every $00:FE00 entry behaves.
+    ("KERNTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "kerntest.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),

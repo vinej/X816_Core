@@ -183,6 +183,12 @@ file at `$07:0000`" at all.
 | `CON_CLS` | — | — |
 | `CON_GOTOXY` | `C` = column, `X` = row | — |
 | `CON_GETXY` | — | `C` = column, `X` = row |
+| `CON_PUTRAW` | `C` = column, `X` = row, `Y` = glyph code | — |
+
+`CON_PUTRAW` places a glyph by code and interprets nothing. `CON_PUTC` has to
+intercept `$08`, `$0A` and `$0D` as backspace, newline and return, which makes
+those three glyphs unreachable through it — and CP437 has real pictures there.
+Anything drawing with box, block or control-code glyphs wants this instead.
 
 ### 5.2 Filesystem
 
@@ -349,3 +355,51 @@ The console and file management both stand on FAT32, so:
    the prompt: [SHELL.md](SHELL.md)
 5. Convert X816_Library to §5 (§6) — file and console calls first, then
    retarget `gfx/fb` and `gfx/graph` onto the library's own primitives
+
+---
+
+## 10. What is built today
+
+The table exists and is green in the emulator: `runtime/kerntab.s` and
+`runtime/kernel.h` in X816_Calypsi, tested by `examples/shell/kerntest.c`.
+
+**Implemented:** the eight console entries, 0–7, plus `SYS_VERSION` (48),
+returning `$0001`. Everything else is `k_nosys` — carry set, `C` = `KERR_NOSYS`.
+All 64 slots are filled, so calling an unimplemented number is a clean refusal
+rather than a jump into whatever bank `$00` happened to contain, and filling a
+slot later is not an ABI break.
+
+The table is stamped into `$00:FE00` at run time by `kern_install`, because the
+HPS loader only ever writes bank `$01` — bank `$00` comes up as whatever was
+there, so the linker cannot place it. The linker script does reserve the page
+(HiRAM now stops at `$FDFF`) so no `near` object lands on top of it.
+
+**Residency — read this before relying on it.** The kernel today *is* the
+resident shell at `$01:0000`, and `run` loads a program to exactly that address.
+A program started with `run` has already overwritten the code the table points
+at. The table is valid for the resident program and for anything loaded above
+bank `$01`. Moving the kernel into the firmware region per §3 fixes that and
+does not change this interface — which is the point of fixing the interface
+first.
+
+### 10.1 Calling it from C
+
+Assembly callers just `jsl $00FExx` with a constant. C cannot: the entry number
+is a variable and the 65816 has no `jsl` through a pointer. `runtime/kcall.s`
+synthesises it — `phk` / `per` to push an `rtl`-shaped return address, then
+`jmp [abs]`, the one transfer that takes its target from memory. `per` rather
+than `pea` keeps it position independent, which matters the moment the kernel
+moves banks.
+
+Its arguments travel in globals — `kern_c`, `kern_x`, `kern_y`, and `kern_carry`
+on return — rather than as parameters, because **Calypsi's argument passing
+changes with arity and with type**. Measured from `cc65816 -S`, not assumed:
+argument one is in `A`; a second 16-bit argument is pushed; a third is pushed
+too, before the second; but a `__far` pointer ignores all of that and travels in
+the direct-page pseudo-registers `_Dp` and `_Dp+2` whatever position it holds.
+A shim that reverse-engineers that per signature is a shim that breaks — and
+this one did, twice, before the rule was measured rather than inferred. One
+parameter is unambiguous under every variant: it is in `A`.
+
+Test 4 of `kerntest.c` is the negative control §8 asks for: it calls an
+unimplemented entry and fails unless carry comes back set with `KERR_NOSYS`.
