@@ -1053,7 +1053,12 @@ module emu
     // LED_USER: activity.  cpu_wait_state here is a genuine bus-idle indicator
     // -- it lights whenever the CPU is parked, whether in WAI/STP or stalled on
     // an SDRAM access, which makes a wedged core visually obvious.
-    assign LED_USER  = ioctl_download | (smc_act_led != 8'h00) | cpu_wait_state;
+    // probe_alive: see the switch_ram probe below.  A sink that reaches a real
+    // output, through a comparison Quartus cannot prove constant -- so the
+    // memory survives synthesis, and the LED is unaffected because the
+    // condition does not occur.
+    assign LED_USER  = ioctl_download | (smc_act_led != 8'h00) | cpu_wait_state
+                     | probe_alive;
     assign LED_POWER = 2'b00;
     assign LED_DISK  = 2'b00;
     assign BUTTONS   = 2'b00;
@@ -1101,12 +1106,24 @@ module emu
     // 65,536.  What this does NOT answer is whether the final 539/553 places
     // and closes timing -- only the real integration can.
     //
+    // KEEPING IT ALIVE IS THE HARD PART.  The first attempt sank the outputs
+    // into `_unused_cpu`, a wire that is assigned and never read -- so the
+    // fitter removed it and everything feeding it, and the 18:23 compile
+    // reported 507/553 with no trace of switch_ram again.  A sink only sinks
+    // if it reaches a device output.
+    //
+    // So the outputs go to LED_USER through a comparison the fitter cannot
+    // fold: it has to build the memory to evaluate it, and the condition is
+    // never true in practice, so the activity LED behaves as it always did.
+    //
     // Check the next fit report for: "Total RAM Blocks 539 / 553", and
     // switch_ram's arrays listed as M10K rather than as logic.  Then delete
     // this block; step 5 replaces it with the real thing.
     // ========================================================================
     wire [7:0]  probe_rddata;
     wire [31:0] probe_vera_rddata;
+    wire        probe_alive = (probe_rddata == 8'hA5)
+                            & (probe_vera_rddata == 32'hDEADBEEF);
 
     switch_ram #(.WORDS(8192), .AWIDTH(13)) u_probe_switch (
         .fast_mode        (~status[2]),
@@ -1124,9 +1141,15 @@ module emu
         .cpu_rddata       (probe_rddata)
     );
 
-    // Observability only; keeps the fitter from trimming the CPU's status cone.
+    // Named sink for signals that are read nowhere else.
+    //
+    // IT DOES NOT PREVENT TRIMMING, despite what this comment used to claim.
+    // `_unused_cpu` is assigned and never read, so the fitter removes it and
+    // everything feeding it -- which is exactly what happened to the
+    // switch_ram probe on the 18:23 compile: instantiated, in the netlist's
+    // source, and gone from the fit report. Anything that must SURVIVE has to
+    // reach a device output; see probe_alive above.
     wire _unused_cpu = cpu_sync | cpu_i_flag | (|cpu_pc) | buttons[0]
-                     | forced_scandoubler | direct_video | (|status) | vera_opaque
-                     | (|probe_rddata) | (|probe_vera_rddata);
+                     | forced_scandoubler | direct_video | (|status) | vera_opaque;
 
 endmodule
