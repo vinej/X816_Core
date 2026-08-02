@@ -1077,8 +1077,56 @@ module emu
     assign USER_OUT = 7'h7F;
     assign ADC_BUS  = 4'hZ;
 
+    // ========================================================================
+    // SYNTHESIS PROBE for switch_ram -- doc/BRAM_SWITCH.md step 4. TEMPORARY.
+    //
+    // The whole plan turns on one question a testbench cannot answer: do
+    // switch_ram's eight nibble arrays infer as M10K?  main_ram.v's header
+    // lists what Quartus needs, and switch_ram breaks one of them -- "one
+    // always block per lane", where true dual port needs two.  If they land
+    // in ALMs instead, the design grows by tens of thousands of LEs and the
+    // plan changes shape.
+    //
+    // A file listed in files.qip but instantiated nowhere is parsed and then
+    // dropped -- the 2026-08-02 18:03 compile reported 507/553 blocks and no
+    // trace of switch_ram, which answered nothing.  So it is instantiated
+    // here and driven by REAL signals, because constant inputs would let the
+    // fitter fold it away just as effectively.
+    //
+    // AT 32 KB, NOT 256.  The real design REPLACES VERA's 352 KB with 128 KB
+    // plus the block; a 256 KB probe would ADD to it and ask for 763 of 553
+    // blocks, which cannot fit and would tell us nothing.  32 KB costs 32
+    // blocks against the 46 free, and the inference question does not depend
+    // on depth: if the pattern packs into M10K at 8,192 words it packs at
+    // 65,536.  What this does NOT answer is whether the final 539/553 places
+    // and closes timing -- only the real integration can.
+    //
+    // Check the next fit report for: "Total RAM Blocks 539 / 553", and
+    // switch_ram's arrays listed as M10K rather than as logic.  Then delete
+    // this block; step 5 replaces it with the real thing.
+    // ========================================================================
+    wire [7:0]  probe_rddata;
+    wire [31:0] probe_vera_rddata;
+
+    switch_ram #(.WORDS(8192), .AWIDTH(13)) u_probe_switch (
+        .fast_mode        (~status[2]),
+        .vera_clk         (pix_clk),
+        .vera_addr        (cpu_a[12:0]),
+        .vera_wrdata      ({4{cpu_do}}),
+        .vera_wrnibblesel (cpu_a[7:0]),
+        .vera_write       (~cpu_rwn),
+        .vera_rddata      (probe_vera_rddata),
+        .cpu_clk          (cpu_clk),
+        .cpu_cs           (flat_cs),
+        .cpu_we           (~cpu_rwn),
+        .cpu_addr         (cpu_a[14:0]),
+        .cpu_wrdata       (cpu_do),
+        .cpu_rddata       (probe_rddata)
+    );
+
     // Observability only; keeps the fitter from trimming the CPU's status cone.
     wire _unused_cpu = cpu_sync | cpu_i_flag | (|cpu_pc) | buttons[0]
-                     | forced_scandoubler | direct_video | (|status) | vera_opaque;
+                     | forced_scandoubler | direct_video | (|status) | vera_opaque
+                     | (|probe_rddata) | (|probe_vera_rddata);
 
 endmodule
