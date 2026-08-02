@@ -18,7 +18,8 @@ built and compiling today.
 | `$00:A000-$00:FEFF` | 24,320 B | bank-0 BRAM | built | RAM |
 | `$00:FF00-$00:FFFF` | 256 B | boot ROM (reads) / bank-0 BRAM (writes) | built | vectors + boot stub; overlay drops on `SYSCTL[0]=0` |
 | **bank `$00` total** | **64 KB** | **BRAM, single cycle** | | 65,280 B RAM + 256 B I/O |
-| `$01:0000-$EF:FFFF` | 15,663,104 B ≈ 14.94 MB | SDRAM | built | user RAM |
+| `$01:0000-$04:FFFF` | 262,144 B = 256 KB | **BRAM, single cycle** | built | user RAM — **program code lands here**, see below |
+| `$05:0000-$EF:FFFF` | 15,400,960 B ≈ 14.69 MB | SDRAM | built | user RAM |
 | `$F0:0000-$FF:FFFF` | 1,048,576 B = 1 MB | SDRAM, write-protected | **planned** | firmware (HPS-loaded) |
 | **Total** | **16,777,216 B = 16 MB** | | | |
 
@@ -98,6 +99,31 @@ with both landing in BRAM. That is impossible on a 6502 and is the natural
 design here.
 
 ---
+
+### Banks `$01-$04` — 256 KB of BRAM
+
+`rtl/fast_ram.sv`. The HPS loader drops a program image at `X816_PROG_BASE`
+(`$01:0000`), and every linker map in the tree places code from there — so a
+program's code is in single-cycle BRAM **without being rebuilt**.
+
+That is worth 4.47x, measured on hardware: `BANKBNCH.BIN` ran one workload from
+bank `$01` and the same bytes from bank `$00` and took 850 ms against 190
+(`doc/AUDIT.md` §6.2). An SDRAM access costs about 6 CPU cycles against 1 for
+BRAM, and since every instruction byte is a memory access, ordinary code pays
+that on almost every fetch.
+
+**VERA dropped from 352 KB to a stock 128 KB to pay for it** — 224 M10K blocks
+moved from VRAM to program RAM. `doc/BRAM_SWITCH.md` records how that was
+decided, including the switchable design that was tried first and could not be
+built.
+
+The array is 32 bits wide with byte enables, not byte-wide: M10K is 10,240 bits
+and a byte-wide array uses only 8,192 of them, so 256 KB would have cost 260
+blocks instead of 205. `addr[1:0]` picks the byte.
+
+Nothing else moved. `MEM_ALLOC`'s arena still starts at `$20:0000` and is still
+SDRAM, so the ~13 MB heap is unchanged, and the firmware region `$F0-$FF` is
+untouched.
 
 ## 2. I/O page — `$00:9F00-$00:9FFF`, 256 B
 

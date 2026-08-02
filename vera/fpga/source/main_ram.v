@@ -44,7 +44,14 @@ module main_ram(
     //   * one always block per lane; Quartus's BRAM pattern matcher wants
     //     that idiom.
     //   * index with a signal whose width matches the array bound.
-    localparam VRAM_WORDS = 90112;      // 352 KB / 4 bytes per word
+    // 128 KB, stock VERA.  It was 352 KB (90112 words) until banks $01-$04
+    // were given BRAM: 224 M10K blocks moved from VRAM to program RAM, which
+    // is what pays for rtl/fast_ram.sv.  doc/BRAM_SWITCH.md has the reasoning
+    // and doc/AUDIT.md 6.2 has the 4.47x that motivated it.  The 19-bit
+    // address space is unchanged and still only partly populated, so nothing
+    // above needed rewiring -- reads past the end return undefined data
+    // exactly as they did past 352 KB.
+    localparam VRAM_WORDS = 32768;      // 128 KB / 4 bytes per word
 
     (* ramstyle = "M10K" *) reg [3:0] vram_n0 [0:VRAM_WORDS-1];
     (* ramstyle = "M10K" *) reg [3:0] vram_n1 [0:VRAM_WORDS-1];

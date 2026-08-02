@@ -1,5 +1,32 @@
 # VERA816 — extended VERA specification for X816
 
+> ## AMENDMENT, 2026-08-02: VRAM IS 128 KB, NOT 352 KB
+>
+> **Everything below describing 352 KB of VRAM describes a configuration that
+> no longer ships.** `main_ram.v` is 32,768 words — stock VERA's 128 KB — and
+> the 224 M10K blocks that held the difference now back banks `$01-$04` as
+> single-cycle program RAM (`rtl/fast_ram.sv`, `doc/MEMORY_MAP.md` §1).
+>
+> **Why:** code executing from SDRAM was measured on hardware at **4.47×
+> slower** than the same code from BRAM (`doc/AUDIT.md` §6.2). Program code
+> loads at `$01:0000`, so moving those banks to BRAM makes every existing
+> binary that much faster by being loaded rather than rewritten. Nothing was
+> using the extra VRAM; the speedup applies to everything.
+> `doc/BRAM_SWITCH.md` records how it was decided, including a switchable
+> design that was tried and could not be built.
+>
+> **What this means for the rest of this document.** The register interface,
+> FX, the blitter, the register windows and the addressing are all unchanged
+> and still normative — VERA816's extensions were always opt-in, so software
+> that does not use the extra space runs exactly as before. What is no longer
+> available is the *capacity*: **640×480 8bpp needs 307,200 bytes and does not
+> fit.** `SCANOUT.BIN`, `SCANFULL.BIN`, `SCAN4.BIN` and `REGWIN.BIN` are
+> written against 352 KB and will not work until this is revisited.
+>
+> §9.1's fill-rate analysis is unaffected in its reasoning and improved in its
+> numbers: fill rate is one `sta` per pixel, a CPU-throughput limit, so a
+> 4.47× CPU is a 4.47× fill rate. See `doc/VERA_MEMORY_REVIEW.md` §4.
+
 **This document is a contract.** The RTL core and the emulator implement it
 separately, so anything left ambiguous here will diverge silently — software
 developed against one would break on the other, and the failure would surface

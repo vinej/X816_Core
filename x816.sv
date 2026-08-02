@@ -20,7 +20,9 @@
 //    $00:A000-$00:FEFF   RAM   (bank-0 BRAM, single cycle)
 //    $00:FF00-$00:FFFF   boot ROM overlay for READS while SYSCTL[0]=1,
 //                        RAM underneath for writes and after SYSCTL[0]=0
-//    $01:0000-$FF:FFFF   RAM   (SDRAM, stalls the CPU per access)
+//    $01:0000-$04:FFFF   RAM   (BRAM, single cycle -- program code lands
+//                        here, so it runs 4.47x faster than it used to)
+//    $05:0000-$FF:FFFF   RAM   (SDRAM, stalls the CPU per access)
 //
 //  I/O page ($00:9Fxx) is deliberately byte-for-byte the X16's, so VERA, VIA
 //  and YM2151 register offsets -- and any driver written against them --
@@ -224,9 +226,10 @@ module emu
     // Retained so the bank-0 loader path still works if PROG_BASE is ever moved
     // there; unreachable while PROG_BASE is in SDRAM.
     wire        dl_to_bank0 = (dl_addr[23:16] == 8'h00);
+    wire        dl_to_fast  = (dl_addr[23:16] >= 8'h01) & (dl_addr[23:16] <= 8'h04);
 
-    wire bank0_ld_busy, sdram_ld_busy;
-    assign ioctl_wait = bank0_ld_busy | sdram_ld_busy;
+    wire bank0_ld_busy, fast_ld_busy, sdram_ld_busy;
+    assign ioctl_wait = bank0_ld_busy | fast_ld_busy | sdram_ld_busy;
 
     // ---- SD block device ---------------------------------------------------
     // Shares the loader write ports with the ioctl downloader.  They can never
@@ -239,6 +242,8 @@ module emu
     wire [23:0] sd_dma_addr;
     wire  [7:0] sd_dma_data;
     wire        sd_dma_to_bank0 = (sd_dma_addr[23:16] == 8'h00);
+    wire        sd_dma_to_fast  = (sd_dma_addr[23:16] >= 8'h01)
+                                & (sd_dma_addr[23:16] <= 8'h04);
 
 
     // ========================================================================
@@ -341,7 +346,14 @@ module emu
     // protection. Reads are unrestricted, and the HPS/SD-DMA loader ports
     // bypass this by construction (that is how the kernel arrives).
     wire fw_region  = (cpu_a[23:20] == 4'hF);
-    wire flat_cs    = dec_valid & ~bank0              // banks $01-$FF -> SDRAM
+
+    // Banks $01-$04 are BRAM (rtl/fast_ram.sv).  That is where the HPS loader
+    // drops a program, so a program's CODE is single-cycle without anything
+    // being rebuilt -- measured 4.47x against SDRAM, doc/AUDIT.md 6.2.
+    wire fast_region = (cpu_a[23:16] >= 8'h01) & (cpu_a[23:16] <= 8'h04);
+    wire fast_cs     = dec_valid & fast_region;
+
+    wire flat_cs    = dec_valid & ~bank0 & ~fast_region   // $05-$FF -> SDRAM
                     & ~(fw_region & ~cpu_rwn);        // ...minus firmware stores
 
     // ========================================================================
@@ -431,15 +443,39 @@ module emu
         .dma_wr       (sd_dma_wr),
         .dma_addr     (sd_dma_addr),
         .dma_data     (sd_dma_data),
-        .dma_busy     (bank0_ld_busy | sdram_ld_busy)
+        .dma_busy     (bank0_ld_busy | fast_ld_busy | sdram_ld_busy)
     );
 
 
     // ========================================================================
     // Memory
     // ========================================================================
-    wire [7:0] bank0_data, boot_data, sdram_data;
+    wire [7:0] bank0_data, boot_data, sdram_data, fast_data;
     wire       sdram_ready;
+
+    // Byte offset within the 256 KB: bank $01 is offset 0, so the bank number
+    // less one supplies the top two bits.
+    wire [7:0]  fast_bank_m1 = cpu_a[23:16] - 8'd1;
+    wire [17:0] fast_addr    = {fast_bank_m1[1:0], cpu_a[15:0]};
+
+    wire [7:0]  fast_ld_bank_m1 = (sd_dma_wr ? sd_dma_addr[23:16]
+                                             : dl_addr[23:16]) - 8'd1;
+    wire [17:0] fast_ld_addr    = {fast_ld_bank_m1[1:0],
+                                   sd_dma_wr ? sd_dma_addr[15:0] : dl_addr[15:0]};
+
+    fast_ram u_fast (
+        .clk     (cpu_clk),
+        .addr    (fast_addr),
+        .cs      (fast_cs),
+        .we      (~cpu_rwn),
+        .wr_data (cpu_do),
+        .rd_data (fast_data),
+        .ld_clk  (sdram_clk),
+        .ld_wr   ((dl_wr & dl_to_fast) | (sd_dma_wr & sd_dma_to_fast)),
+        .ld_addr (fast_ld_addr),
+        .ld_data (sd_dma_wr ? sd_dma_data : ioctl_dout),
+        .ld_busy (fast_ld_busy)
+    );
 
     bank0_ram u_bank0 (
         .clk     (cpu_clk),
@@ -472,7 +508,8 @@ module emu
         .ready      (sdram_ready),
 
         .sdram_clk  (sdram_clk),
-        .ld_wr      ((dl_wr & ~dl_to_bank0) | (sd_dma_wr & ~sd_dma_to_bank0)),
+        .ld_wr      ((dl_wr & ~dl_to_bank0 & ~dl_to_fast)
+                     | (sd_dma_wr & ~sd_dma_to_bank0 & ~sd_dma_to_fast)),
         .ld_addr    (sd_dma_wr ? sd_dma_addr : dl_addr),
         .ld_data    (sd_dma_wr ? sd_dma_data : ioctl_dout),
         .ld_busy    (sdram_ld_busy),
@@ -986,6 +1023,7 @@ module emu
                     sysctl_cs  ? sysctl_data   :
                     timer_cs   ? timer_data    :
                     bank0_cs   ? bank0_data    :
+                    fast_cs    ? fast_data     :
                     flat_cs    ? sdram_data    :
                                  open_bus_r;
 

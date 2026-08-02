@@ -103,7 +103,12 @@ module tb_boot #(
 
     wire bank0_cs   = dec_valid & bank0 & ~io_page;
     wire fw_region  = (cpu_a[23:20] == 4'hF);         // firmware write-protect
-    wire flat_cs    = dec_valid & ~bank0 & ~(fw_region & ~cpu_rwn);
+    // Banks $01-$04 are fast_ram, exactly as in x816.sv. This replica has to
+    // track that change or the boot test keeps proving the OLD memory map:
+    // bootprobe is staged at $01:0000, which is now BRAM, not SDRAM.
+    wire fast_region = (cpu_a[23:16] >= 8'h01) & (cpu_a[23:16] <= 8'h04);
+    wire fast_cs    = dec_valid & fast_region;
+    wire flat_cs    = dec_valid & ~bank0 & ~fast_region & ~(fw_region & ~cpu_rwn);
 
     // ---- SYSCTL: replica of x816.sv:337-357 (SD regs/counters absent) ------
     reg sysctl_overlay = 1'b1;
@@ -120,6 +125,9 @@ module tb_boot #(
     // ---- memories: the real RTL --------------------------------------------
     wire [7:0] bank0_data, boot_data, sdram_data;
     wire       sdram_ready;
+    wire [7:0] fast_data;
+    wire [7:0] fast_bank_m1 = cpu_a[23:16] - 8'd1;
+    wire [17:0] fast_addr   = {fast_bank_m1[1:0], cpu_a[15:0]};
 
     bank0_ram u_bank0 (
         .clk     (cpu_clk),
@@ -147,6 +155,30 @@ module tb_boot #(
     reg   [7:0] ld_data = 8'h0;
     wire        ld_busy;
 
+    // ...and routed by destination, exactly as x816.sv routes it. MODE=1
+    // stages the probe at $01:0000, which is fast_ram now; MODE=2 stages it at
+    // $F0:0000, which is still SDRAM. Getting this wrong would load the image
+    // into a memory the CPU does not fetch from, and the failure would look
+    // like a broken boot ROM.
+    wire        ld_to_fast   = (ld_addr[23:16] >= 8'h01) & (ld_addr[23:16] <= 8'h04);
+    wire  [7:0] ld_bank_m1   = ld_addr[23:16] - 8'd1;
+    wire [17:0] ld_fast_addr = {ld_bank_m1[1:0], ld_addr[15:0]};
+    wire        fast_ld_busy;
+
+    fast_ram u_fast (
+        .clk     (cpu_clk),
+        .addr    (fast_addr),
+        .cs      (fast_cs),
+        .we      (~cpu_rwn),
+        .wr_data (cpu_do),
+        .rd_data (fast_data),
+        .ld_clk  (sdram_clk),
+        .ld_wr   (ld_wr & ld_to_fast),
+        .ld_addr (ld_fast_addr),
+        .ld_data (ld_data),
+        .ld_busy (fast_ld_busy)
+    );
+
     wire [12:0] sd_pin_a;
     wire [15:0] sd_pin_dq;
     wire  [1:0] sd_pin_ba;
@@ -162,7 +194,7 @@ module tb_boot #(
         .ready      (sdram_ready),
 
         .sdram_clk  (sdram_clk),
-        .ld_wr      (ld_wr),
+        .ld_wr      (ld_wr & ~ld_to_fast),
         .ld_addr    (ld_addr),
         .ld_data    (ld_data),
         .ld_busy    (ld_busy),
@@ -212,6 +244,7 @@ module tb_boot #(
         if (cpu_rdy) open_bus_r <= cpu_rwn ? cpu_di : cpu_do;
 
     assign cpu_di = boot_sel   ? boot_data    :
+                    fast_cs    ? fast_data    :
                     vera_cs    ? vera_stub_rd :
                     sysctl_cs  ? sysctl_data  :
                     bank0_cs   ? bank0_data   :
@@ -239,7 +272,12 @@ module tb_boot #(
             $display("[TB] staging %0d bytes at %06x via the loader port", IMAGE_LEN, STAGE_BASE);
             for (si = 0; si < IMAGE_LEN; si = si + 1) begin
                 @(posedge sdram_clk);
-                while (ld_busy) @(posedge sdram_clk);
+                // BOTH busies. x816.sv ORs them into ioctl_wait for exactly
+                // this reason: whichever memory the byte is destined for is
+                // the one applying backpressure, and honouring only the SDRAM
+                // one overruns fast_ram's crossing FIFO and silently drops
+                // bytes -- which presents as a boot ROM that finds no magic.
+                while (ld_busy | fast_ld_busy) @(posedge sdram_clk);
                 ld_wr   <= 1'b1;
                 ld_addr <= STAGE_BASE + si;
                 ld_data <= image[si];

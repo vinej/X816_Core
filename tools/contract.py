@@ -237,8 +237,6 @@ X16 register offsets port over unchanged; $9F80-$9F8F is X816's own.""",
         Const("X816_SYSCTL_LAST", 0x9F8F, 4, "end of the SYSCTL decode"),
         Const("X816_SYSCTL_OVERLAY", 0x01, 2, "bit 0: boot ROM overlay enable"),
         Const("X816_SYSCTL_EMU", 0x02, 2, "bit 1: CPU E flag, read-only"),
-        Const("X816_SYSCTL_FAST", 0x04, 2,
-              "bit 2: 1 = FAST mode, banks $01-$04 are BRAM. READ-ONLY"),
         # The SD block device. CMD and STATUS are separate addresses on
         # purpose and $9F8B must stay unmapped -- rtl/sd_block.sv says why at
         # length, and doc/AUDIT.md M-3 is what happens when a doc disagrees.
@@ -264,32 +262,24 @@ X16 register offsets port over unchanged; $9F80-$9F8F is X816's own.""",
         Const("X816_BOOT_SIZE", 0x100, 3, "and it is exactly one page"),
     ])
 
-# ---- the switchable 256 KB --------------------------------------------------
+# ---- banks $01-$04 in BRAM --------------------------------------------------
 group(
-    "The switchable 256 KB (doc/BRAM_SWITCH.md)",
-    """One block of BRAM, instantiated always, owned by the CPU in FAST mode
-(banks $01-$04 become single-cycle) or by VERA in VIDEO mode (VRAM becomes 384
-KB). FAST is the default, because a program's code lives in bank $01 and
-running it from BRAM instead of SDRAM was measured at 4.47x (doc/AUDIT.md 6.2)
--- every existing binary gets that by being loaded rather than rewritten.
+    "Fast program RAM (doc/BRAM_SWITCH.md)",
+    """Banks $01-$04 are BRAM, always. That is where the HPS loader drops a
+program, so a program's CODE is single-cycle without anything being rebuilt --
+measured 4.47x against SDRAM on hardware, doc/AUDIT.md 6.2.
 
-THE MODE IS AN OSD OPTION AND CHANGING IT IS A FULL COLD BOOT. It is not a
-register software can write: nothing the guest stores survives a cold boot, so
-there is nowhere to keep a request. What persists is MiSTer's own core config
-on the SD card. Software can only READ the mode, through SYSCTL bit 2, and a
-program needing the other one says so and stops.""",
+There is no mode and no register: an earlier design made this block switchable
+with VERA and it could not be built (BRAM_SWITCH.md 9). VERA is a stock 128 KB
+instead, which is what pays for it.""",
     [
-        Const("X816_SWITCH_SIZE", 0x040000, 6, "256 KB, four whole banks"),
         Const("X816_FAST_BASE", 0x010000, 6,
-              "FAST: first byte of BRAM -- also X816_PROG_BASE, which is the point"),
-        Const("X816_FAST_LAST", 0x04FFFF, 6, "FAST: last byte, bank $04"),
+              "first byte of BRAM -- also X816_PROG_BASE, which is the point"),
+        Const("X816_FAST_LAST", 0x04FFFF, 6, "last byte, bank $04"),
+        Const("X816_FAST_SIZE", 0x040000, 6, "256 KB, four whole banks"),
         Const("X816_FAST_BANKS", 4, 2, "banks $01-$04", base=10),
-        Const("X816_VRAM_FAST", 0x020000, 6, "VIDEO off: VERA is stock 128 KB"),
-        Const("X816_VRAM_VIDEO", 0x060000, 6,
-              "VIDEO on: 128 KB base + the block = 384 KB, $00000-$5FFFF"),
-        Const("X816_OSD_FAST_BIT", 2, 1,
-              "status[] bit from CONF_STR; 0 = FAST (default), 1 = VIDEO",
-              base=10),
+        Const("X816_VRAM_SIZE", 0x020000, 6,
+              "VERA is stock 128 KB; it was 352 KB before the trade"),
     ])
 
 # ---- the pieces of the I/O page the interrupt dispatcher touches -------------

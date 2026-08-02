@@ -58,7 +58,7 @@ vcom -quiet -2008 -work work \
 
 echo "=== compile RTL + sim models + testbenches ==="
 vlog -quiet -sv ../rtl/bank0_ram.sv ../rtl/boot_rom.sv ../rtl/flat_sdram.sv \
-     sdram_sim.v vera_stub.sv tb_boot.v
+     ../rtl/fast_ram.sv sdram_sim.v vera_stub.sv tb_boot.v
 vlog -quiet -sv ../vera/fpga/source/main_ram.v ../vera/fpga/source/vram_if.v \
      ../vera/fpga/source/blit816.v tb_blit816.v
 vlog -quiet -sv ../rtl/ms_timer.sv tb_ms_timer.v

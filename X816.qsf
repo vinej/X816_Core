@@ -67,6 +67,8 @@ set_instance_assignment -name STATE_MACHINE_PROCESSING "USER-ENCODED" -to "emu:e
 source sys/sys.tcl
 source sys/sys_analog.tcl
 source files.qip
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ms_timer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/switch_ram.sv
 
 set_global_assignment -name DEVICE 5CSEBA6U23I7
 set_global_assignment -name FAMILY "Cyclone V"
