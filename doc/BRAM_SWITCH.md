@@ -1,11 +1,35 @@
-# The switchable 256 KB — fast program RAM, or VERA's extra VRAM
+# Banks $01-$04 in BRAM — 256 KB of single-cycle program RAM
 
-A plan, not a description: nothing here is built. Written 2026-08-02, after
-`BANKBNCH.BIN` measured what executing from SDRAM actually costs.
+Written 2026-08-02 as a plan for a *switchable* block, then rewritten when
+synthesis said no. What survives is simpler than what was planned, and §9
+records why, because the reasoning is the useful part.
+
+---
+
+## 0. What this became
+
+**Banks `$01-$04` are BRAM. Always. VERA is a stock 128 KB. There is no mode,
+no OSD option and no cold boot.**
+
+The plan was a 256 KB block switchable between VERA (384 KB VRAM) and the CPU.
+It died on two compiles' worth of evidence (§9) and was dropped in favour of
+the fixed split, on the grounds that nobody was using the 352 KB VERA anyway.
+
+What is kept from the original plan is the thing that made it worth doing:
+**programs already link to `$01:0000`, so every existing binary gets the
+measured 4.47x by being loaded rather than rewritten.**
+
+| | |
+|---|---|
+| banks `$01-$04` | 256 KB BRAM, single cycle |
+| banks `$05-$EF` | SDRAM, ~13 MB, unchanged — `MEM_ALLOC`'s arena included |
+| bank `$00` | BRAM, unchanged |
+| VERA | 128 KB, stock |
 
 ---
 
 ## 1. What is being built
+
 
 One 256 KB block of BRAM, instantiated **always**, wired to one of two owners
 by a mode bit:
@@ -298,3 +322,69 @@ The reason to expect otherwise is §1: 23.5 KB needs the programmer to choose
 what goes in it, and 256 KB at `$01:0000` needs nobody to choose anything. But
 the cheap experiment exists, costs no Quartus round, and should be run before
 step 4 commits silicon.
+
+---
+
+## 9. Why the switchable version was dropped — two compiles of evidence
+
+Recorded because the reasoning generalises past this feature.
+
+**Attempt 1: describe the memory behaviourally, as `main_ram.v` does.**
+
+> Error (276003): Cannot convert all sets of registers into RAM megafunctions
+> ... the resulting number of registers ... exceeds the number of registers in
+> the device
+
+Quartus could not infer it, fell back to flip-flops — 262,144 for a 32 KB
+probe against a device with about 84,000 — and died in 28 seconds. `main_ram.v`
+gets away with inference because it is **single port**; a switchable block is
+true dual port on **two different clocks** with both ports writing, and the
+inference templates do not cover that shape.
+
+**Attempt 2: instantiate `altsyncram` in `BIDIR_DUAL_PORT` explicitly.**
+
+> Error (170012): Fitter requires 6192 LABs to implement the design, but the
+> device contains only 4191 LABs
+
+Synthesis accepted it; the fitter did not. Seventeen minutes to find out.
+
+**The answer was already written down.** `bank0_ram.sv`'s header says: *"M10K
+has two ports and the read port owns one, so the loader cannot have a port of
+its own"* — and resolves it by keeping **one array on one clock** and carrying
+the second master across by handshake. That is the pattern this device
+supports.
+
+Which exposes why the switchable design could not work: **neither owner can be
+the one that crosses.** Put the memory on `cpu_clk` and VERA's scanout has to
+cross into 8 MHz, which breaks the renderer. Put it on `pix_clk` and the CPU's
+read latency becomes 2–3 pixel clocks (80–120 ns) against a 125 ns CPU cycle —
+marginal, and if it misses, the CPU stalls and the entire 4.47x evaporates.
+The mode-selected clock that would fix it is a clock mux into BRAM, which is
+its own class of problem.
+
+Dropping the switch removes all of it. One owner, one clock, single port —
+`bank0_ram`'s shape exactly, which is proven in this design rather than hoped
+for.
+
+**And the probe earned its keep.** It was instantiated *unwired* purely to ask
+synthesis a question, and both failures cost 28 seconds and 17 minutes instead
+of arriving after six muxes had been written against a design that could not
+exist. Two lessons came with it: a file listed in `files.qip` but instantiated
+nowhere is parsed and dropped without comment, and a signal sunk into a wire
+that nothing reads is removed along with everything feeding it. Neither failure
+announces itself — both look exactly like "the change had no effect".
+
+## 10. Packing: 32 bits wide, not 8
+
+`bank0_ram` measures **65 M10K blocks for 64 KB** byte-wide: M10K is 10,240
+bits and a byte-wide array uses 8,192 of them, so a fifth is wasted. At 32 bits
+the block is fully used.
+
+| 256 KB as | blocks | total | free |
+|---|---:|---:|---:|
+| byte-wide | 260 | 543 | 10 |
+| **32-bit + byte enables** | **205** | **488** | **65** |
+
+Same capacity, 55 blocks cheaper, on a device that was already 92% full. The
+cost is a read mux and byte enables, both free in logic. `addr[1:0]` picks the
+byte.

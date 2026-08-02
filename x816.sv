@@ -1053,12 +1053,7 @@ module emu
     // LED_USER: activity.  cpu_wait_state here is a genuine bus-idle indicator
     // -- it lights whenever the CPU is parked, whether in WAI/STP or stalled on
     // an SDRAM access, which makes a wedged core visually obvious.
-    // probe_alive: see the switch_ram probe below.  A sink that reaches a real
-    // output, through a comparison Quartus cannot prove constant -- so the
-    // memory survives synthesis, and the LED is unaffected because the
-    // condition does not occur.
-    assign LED_USER  = ioctl_download | (smc_act_led != 8'h00) | cpu_wait_state
-                     | probe_alive;
+    assign LED_USER  = ioctl_download | (smc_act_led != 8'h00) | cpu_wait_state;
     assign LED_POWER = 2'b00;
     assign LED_DISK  = 2'b00;
     assign BUTTONS   = 2'b00;
@@ -1082,73 +1077,15 @@ module emu
     assign USER_OUT = 7'h7F;
     assign ADC_BUS  = 4'hZ;
 
-    // ========================================================================
-    // SYNTHESIS PROBE for switch_ram -- doc/BRAM_SWITCH.md step 4. TEMPORARY.
-    //
-    // The whole plan turns on one question a testbench cannot answer: do
-    // switch_ram's eight nibble arrays infer as M10K?  main_ram.v's header
-    // lists what Quartus needs, and switch_ram breaks one of them -- "one
-    // always block per lane", where true dual port needs two.  If they land
-    // in ALMs instead, the design grows by tens of thousands of LEs and the
-    // plan changes shape.
-    //
-    // A file listed in files.qip but instantiated nowhere is parsed and then
-    // dropped -- the 2026-08-02 18:03 compile reported 507/553 blocks and no
-    // trace of switch_ram, which answered nothing.  So it is instantiated
-    // here and driven by REAL signals, because constant inputs would let the
-    // fitter fold it away just as effectively.
-    //
-    // AT 32 KB, NOT 256.  The real design REPLACES VERA's 352 KB with 128 KB
-    // plus the block; a 256 KB probe would ADD to it and ask for 763 of 553
-    // blocks, which cannot fit and would tell us nothing.  32 KB costs 32
-    // blocks against the 46 free, and the inference question does not depend
-    // on depth: if the pattern packs into M10K at 8,192 words it packs at
-    // 65,536.  What this does NOT answer is whether the final 539/553 places
-    // and closes timing -- only the real integration can.
-    //
-    // KEEPING IT ALIVE IS THE HARD PART.  The first attempt sank the outputs
-    // into `_unused_cpu`, a wire that is assigned and never read -- so the
-    // fitter removed it and everything feeding it, and the 18:23 compile
-    // reported 507/553 with no trace of switch_ram again.  A sink only sinks
-    // if it reaches a device output.
-    //
-    // So the outputs go to LED_USER through a comparison the fitter cannot
-    // fold: it has to build the memory to evaluate it, and the condition is
-    // never true in practice, so the activity LED behaves as it always did.
-    //
-    // Check the next fit report for: "Total RAM Blocks 539 / 553", and
-    // switch_ram's arrays listed as M10K rather than as logic.  Then delete
-    // this block; step 5 replaces it with the real thing.
-    // ========================================================================
-    wire [7:0]  probe_rddata;
-    wire [31:0] probe_vera_rddata;
-    wire        probe_alive = (probe_rddata == 8'hA5)
-                            & (probe_vera_rddata == 32'hDEADBEEF);
-
-    switch_ram #(.WORDS(8192), .AWIDTH(13)) u_probe_switch (
-        .fast_mode        (~status[2]),
-        .vera_clk         (pix_clk),
-        .vera_addr        (cpu_a[12:0]),
-        .vera_wrdata      ({4{cpu_do}}),
-        .vera_wrnibblesel (cpu_a[7:0]),
-        .vera_write       (~cpu_rwn),
-        .vera_rddata      (probe_vera_rddata),
-        .cpu_clk          (cpu_clk),
-        .cpu_cs           (flat_cs),
-        .cpu_we           (~cpu_rwn),
-        .cpu_addr         (cpu_a[14:0]),
-        .cpu_wrdata       (cpu_do),
-        .cpu_rddata       (probe_rddata)
-    );
-
     // Named sink for signals that are read nowhere else.
     //
     // IT DOES NOT PREVENT TRIMMING, despite what this comment used to claim.
     // `_unused_cpu` is assigned and never read, so the fitter removes it and
-    // everything feeding it -- which is exactly what happened to the
-    // switch_ram probe on the 18:23 compile: instantiated, in the netlist's
-    // source, and gone from the fit report. Anything that must SURVIVE has to
-    // reach a device output; see probe_alive above.
+    // everything feeding it. A memory instantiated purely to see whether it
+    // would infer was sunk here and vanished from the fit report without a
+    // word -- the compile reported the same block count as if it had never
+    // been added. Anything that must SURVIVE synthesis has to reach a device
+    // output, not a named wire.
     wire _unused_cpu = cpu_sync | cpu_i_flag | (|cpu_pc) | buttons[0]
                      | forced_scandoubler | direct_video | (|status) | vera_opaque;
 
