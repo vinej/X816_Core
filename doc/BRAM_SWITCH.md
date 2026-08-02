@@ -13,12 +13,12 @@ by a mode bit:
 | mode | the 256 KB belongs to | VERA | banks `$01-$04` | for |
 |---|---|---|---|---|
 | **FAST** (default) | the CPU | 128 KB, stock | **BRAM** | everything, normally |
-| **VIDEO** | VERA | **352 KB**, exactly as today | SDRAM | 640×480 8bpp and the VERA816 extensions |
+| **VIDEO** | VERA | **384 KB** — 32 KB *more* than today | SDRAM | 640×480 8bpp and the VERA816 extensions |
 
 **FAST is the default.** The machine is a fast-CPU machine that can be put into
 a high-resolution graphics mode, not the other way round. In FAST a program
 gets **256 KB of 4.5×-speed code space plus 13 MB of SDRAM** for data; in
-VIDEO the machine is byte-for-byte what it is today.
+VIDEO it is today's machine with a little more VRAM.
 
 That choice has a consequence worth stating plainly: **out of the box,
 `SCANOUT.BIN`, `SCANFULL.BIN`, `SCAN4.BIN` and `REGWIN.BIN` will not run** —
@@ -66,27 +66,55 @@ VERA**: software that does not use the new registers runs unchanged.
 From `output_files/X816.fit.rpt` at `X816_20260802`: **553 M10K blocks, 507
 used (92%), 46 free.**
 
-| | M10K |
-|---|---:|
-| VERA today, 352 KB | 282 |
-| proposed: VERA base 128 KB | 103 |
-| proposed: switchable block 256 KB | 205 |
-| **proposed total** | **308** |
+The block count must come from VERA's *actual* packing, not from dividing bits
+by 10,240. `main_ram.v` says so itself: eight 4-bit arrays, M10K x4 mode 2048
+deep, **44 blocks per array x 8 = 352 blocks for 352 KB**. Nibble granularity
+is required for FX's 4-bit write enables and costs 20% packing efficiency —
+"M10K x4 mode uses 4 of 5 bits" — which a generic bits/10240 estimate misses
+entirely. At VERA's organisation the rule is simply **1 M10K block per KB**.
 
-**+26 blocks → 533/553 (96%), 20 free.** It fits, and only just.
+So VERA is 352 of the 507 blocks in use, and everything else — `bank0_ram`,
+the MiSTer scaler, VERA's audio FIFO and line buffers — is the other 155.
 
-Two honest caveats. These counts assume near-perfect packing at whatever width
-each memory is inferred with; VERA's `main_ram` may pack worse, and the fitter
-is the only authority. And 96% is where placement and timing closure start to
-fight back — §7 treats that as the main risk, not the arithmetic.
+| switchable block | VIDEO VRAM | VERA blocks | total | free |
+|---:|---:|---:|---:|---:|
+| 192 KB | 320 KB — *less than today* | 320 | 475 | 78 |
+| **224 KB** | **352 KB — unchanged** | **352** | **507 — exactly today** | **46** |
+| **256 KB** | 384 KB | 384 | 539 | **14** |
 
-**In VIDEO mode only 224 KB of the 256 is used**, keeping VRAM at exactly 352
-KB. The 32 KB idles. That is deliberate: 256 KB is four whole banks for the
-CPU, which keeps the address decode trivial, and VERA staying at 352 KB means
-**zero** software or documentation impact in the default mode. Extending VERA
-to 384 KB instead was considered and rejected — VERA_MEMORY_REVIEW.md §2 found
-more VRAM "buys nothing", and it would churn VERA816.md for a mode nobody
-asked to change.
+**224 KB is free.** It costs not one extra block, leaves VERA at exactly the
+352 KB it has now, and still hands the CPU 224 KB of BRAM. Its one cost is that
+224 KB is three and a half banks: either the CPU takes banks `$01-$03` and 32
+KB idles, or the decode carries one extra term for a half-populated bank `$04`
+(`bank 1..3`, or `bank==4 && !addr[15]`). Neither is hard, and a program simply
+sees fast memory from `$01:0000` up to `$04:7FFF` and SDRAM above it.
+
+**256 KB costs 32 blocks and leaves 14 free — 97% occupancy.** That is where
+placement and timing closure start pushing back, and the fitter is the only
+authority. It buys four clean banks, 32 KB more fast RAM, and 384 KB of VRAM in
+VIDEO mode.
+
+**192 KB is rejected**: it would cut VIDEO-mode VRAM below what the machine has
+today, which is a regression rather than an option.
+
+In VIDEO mode VERA gets the whole block. An earlier draft of this document
+wired only part of it to keep VRAM at exactly 352 KB and left the remainder
+idle; that was wrong twice over — it wasted real memory for no gain, and 352 KB
+is the *less* tidy number. 384 KB is `$00000-$5FFFF`, exactly six 64 KB banks,
+against 352 KB's `$00000-$57FFF`. The existing 19-bit VRAM addressing already
+spans it (2^19 = 512 KB).
+
+Software written for 352 KB is unaffected — there is simply more above it. What
+does need attention: `VERA816.md` documents 352 KB throughout and must be
+amended, and two existing limits should be re-checked against a larger space
+rather than assumed — the sprite-attribute reach (`AUDIT.md` M-1, which caps
+sprite fetches at the first 128 KB) and where the REGWIN register windows sit.
+
+**The block must keep VERA's nibble organisation** — eight 4-bit lanes, 32-bit
+words — because in VIDEO mode it is part of VRAM and FX needs 4-bit write
+enables. The CPU side then addresses a byte as two nibbles of a word, with
+`addr[1:0]` picking the lane. A byte-organised block would pack ~20% better
+(205 blocks for 256 KB instead of 256) but could not serve VERA at all.
 
 ---
 
@@ -194,7 +222,8 @@ under.
    read-only SYSCTL bit; the kernel printing the mode at boot; and the
    VERA816 tests checking the bit and refusing with a message instead of
    drawing garbage.
-6. **Linker maps and docs** — a FAST-mode map, `MEMORY_MAP.md`, and a
+6. **Linker maps and docs** — a FAST-mode map, `MEMORY_MAP.md`, `VERA816.md`
+   amended from 352 KB to 384 KB with the sprite-reach and REGWIN re-check, and a
    conformance test that proves a program really executed from BRAM. `BANKBNCH`
    already has the mechanism: it reports the bank it ran in, and the same trick
    proves the mode took effect.

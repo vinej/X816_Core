@@ -69,6 +69,7 @@ X816_SYSCTL         = $9F80        ; bit 0 boot overlay, bit 1 E flag (r/o)
 X816_SYSCTL_LAST    = $9F8F        ; end of the SYSCTL decode
 X816_SYSCTL_OVERLAY = $01          ; bit 0: boot ROM overlay enable
 X816_SYSCTL_EMU     = $02          ; bit 1: CPU E flag, read-only
+X816_SYSCTL_FAST    = $04          ; bit 2: 1 = FAST mode, banks $01-$04 are BRAM. READ-ONLY
 X816_SD_LBA         = $9F81        ; $9F81-$9F84 block number, LE
 X816_SD_MEM         = $9F85        ; $9F85-$9F87 DMA address, LE (READ only)
 X816_SD_COUNT       = $9F88        ; blocks to transfer, 1-255
@@ -83,6 +84,15 @@ X816_TIMER_DIV      = 8000         ; cpu_clk cycles per tick: 8.000 MHz / 8000 =
 X816_TIMER_HZ       = 1000         ; so the unit is a millisecond
 X816_BOOT_BASE      = $FF00        ; boot ROM read overlay, bank $00
 X816_BOOT_SIZE      = $100         ; and it is exactly one page
+
+; ---- The switchable 256 KB (doc/BRAM_SWITCH.md)
+X816_SWITCH_SIZE  = $040000        ; 256 KB, four whole banks
+X816_FAST_BASE    = $010000        ; FAST: first byte of BRAM -- also X816_PROG_BASE, which is the point
+X816_FAST_LAST    = $04FFFF        ; FAST: last byte, bank $04
+X816_FAST_BANKS   = 4              ; banks $01-$04
+X816_VRAM_FAST    = $020000        ; VIDEO off: VERA is stock 128 KB
+X816_VRAM_VIDEO   = $060000        ; VIDEO on: 128 KB base + the block = 384 KB, $00000-$5FFFF
+X816_OSD_FAST_BIT = 2              ; status[] bit from CONF_STR; 0 = FAST (default), 1 = VIDEO
 
 ; ---- Interrupt hardware
 X816_VERA_IEN        = $9F26       ; VERA interrupt enable
