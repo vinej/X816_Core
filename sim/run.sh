@@ -62,7 +62,14 @@ vlog -quiet -sv ../rtl/bank0_ram.sv ../rtl/boot_rom.sv ../rtl/flat_sdram.sv \
 vlog -quiet -sv ../vera/fpga/source/main_ram.v ../vera/fpga/source/vram_if.v \
      ../vera/fpga/source/blit816.v tb_blit816.v
 vlog -quiet -sv ../rtl/ms_timer.sv tb_ms_timer.v
-vlog -quiet -sv ../rtl/switch_ram.sv tb_switch_ram.v
+# switch_ram INSTANTIATES altsyncram rather than describing a memory, because
+# Quartus refused to infer a dual-clock true-dual-port array (Error 276003 --
+# see the file's header). Simulating the real thing therefore needs Altera's
+# megafunction library; ModelSim ASE ships it pre-compiled as altera_mf_ver.
+# Mapping it here rather than swapping in a behavioural model keeps the
+# testbench pointed at the code that actually gets synthesised.
+MF_VER=${MF_VER:-$MS/../altera/verilog/altera_mf}
+vlog -quiet -sv -L altera_mf_ver ../rtl/switch_ram.sv tb_switch_ram.v
 
 run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length
   local out
@@ -73,7 +80,7 @@ run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length
 
 run_switch () {
   local out
-  out=$(vsim -c -do "run -all; quit -f" tb_switch_ram 2>&1) || true
+  out=$(vsim -c -L altera_mf_ver -do "run -all; quit -f" tb_switch_ram 2>&1) || true
   echo "$out" | grep -E "\[TB\]|PASS|FAIL|Error" || echo "$out" | tail -20
   echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
 }

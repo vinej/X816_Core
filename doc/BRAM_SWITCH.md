@@ -116,6 +116,25 @@ enables. The CPU side then addresses a byte as two nibbles of a word, with
 `addr[1:0]` picking the lane. A byte-organised block would pack ~20% better
 (205 blocks for 256 KB instead of 256) but could not serve VERA at all.
 
+**And it must be INSTANTIATED, not inferred — this was measured, not assumed.**
+The first version described the arrays behaviourally the way `main_ram.v` does
+and Quartus refused outright:
+
+> Error (276003): Cannot convert all sets of registers into RAM megafunctions
+> ... the resulting number of registers ... exceeds the number of registers in
+> the device
+
+It fell back to flip-flops — 262,144 of them for a 32 KB probe against a device
+with about 84,000 — and died in 28 seconds. `main_ram.v` gets away with
+inference because it is **single port**; this is true dual port on **two
+different clocks** with both ports writing, which Quartus's templates do not
+cover. `switch_ram.sv` now instantiates eight `altsyncram` megafunctions in
+`BIDIR_DUAL_PORT` mode directly. Eight and not one because `altsyncram`'s byte
+enables are 8-bit granular and FX needs 4-bit.
+
+The probe caught this for the price of a 28-second failed compile, before any
+of the six muxes were written. That is what step 4 is for.
+
 ---
 
 ## 4. What switches, and what does not
