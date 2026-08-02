@@ -745,11 +745,10 @@ of *opcode* rather than of loop. The 16-bit half is `kern_block_move` /
 `kern_block_fill` in `system/x816kernel.asm`, which is where it has to be: that
 file owns `rep`/`sep`, and a block move is inherently 16-bit.
 
-`MVN` lands on exactly 7.0 cycles/byte — the 65816's published figure — and the
-library now measures identical to a raw reference implementation of the same
-instruction. `run-membench.sh` is therefore no longer a decision aid but a
-**regression guard**: if a library row drifts back toward the word-loop row,
-something has put a loop back in the path.
+In the emulator `MVN` lands on exactly 7.0 cycles/byte — the 65816's published
+figure — and the library measures identical to a raw reference implementation
+of the same instruction. On hardware it does not, and the gap turned out to be
+the most useful thing the benchmark has produced. See the next section.
 
 **The device-register path is still a byte loop and always will be.** An
 address in `$9F00-$9FFF` deliberately does not advance so a copy can stream
@@ -757,6 +756,67 @@ through VERA's data port with no staging buffer; `MVN` always advances both
 pointers. That carve-out is the one genuinely useful thing x16lib inherited
 from the KERNAL originals, and it is the only remaining path where the byte
 count costs more than the setup.
+
+### On hardware the two MVN paths disagree by 2.5x, and the reason generalises
+
+`MEMBENCH.BIN` on a DE10-Nano, same 4 x 32 KB, 8 MHz:
+
+| | ms | cycles/byte | emulator said |
+|---|---:|---:|---:|
+| `mem_copy` — library, stub in **BRAM** | 198 | **12.1** | 7.0 |
+| 16-bit word loop | 819 | 50.0 | 12.0 |
+| `MVN`, stub in **SDRAM** | 492 | 30.0 | 7.0 |
+| `mem_fill` — library, stub in **BRAM** | 197 | **12.0** | 7.0 |
+| 16-bit word loop | 598 | 36.5 | 8.5 |
+| `MVN` fill, stub in **SDRAM** | 492 | 30.0 | 7.0 |
+
+Both MVN rows run the *same instruction over the same bytes* and differ by
+2.5x. The emulator, whose memory is uniform, reported them identical — this is
+invisible without hardware.
+
+**`MVN` re-fetches its own instruction for every byte it moves.** It
+re-executes by decrementing PC by 3, so the opcode and both bank operands are
+fetched again per byte: five memory cycles per byte, three of them instruction
+fetch. *Where the instruction lives* therefore dominates the cost:
+
+* the library's stub is four bytes of initialised data in bank `$00` —
+  **BRAM, single cycle**
+* `membench.s`'s reference stub is `.byte $54,0,0` in its `code` section —
+  bank `$01`, **SDRAM**
+
+The arithmetic checks out both ways. BRAM stub: 3 x 1 + two SDRAM accesses
+(~9) ≈ 12, against 12.1 measured. SDRAM stub: ~13 + ~9 ≈ 30, against 30.0. And
+the emulator-to-hardware ratios separate cleanly by where the code lives — the
+two SDRAM-resident paths are 4.2x and 4.3x slower than their emulator figures,
+while the library's is only 1.7x.
+
+**The stub is in bank `$00` for a CORRECTNESS reason** — MVN's bank operands
+are immediate bytes, so a runtime bank means self-modifying code, and the
+firmware region is write-protected. It being 2.5x faster as well is luck, not
+foresight, and is recorded here as luck.
+
+**The general rule this establishes, which is bigger than `mem_copy`:** on
+X816, code in bank `$00` is single-cycle BRAM and code in bank `$01` is SDRAM
+at roughly a 4x instruction-fetch penalty. Any tight loop pays that on every
+instruction it fetches, per iteration.
+
+That also revises the answer to "should x16lib be rewritten 16-bit", which
+`run-membench.sh` was built to settle. Register width was never the dominant
+term — **instruction fetch is**. A 16-bit rewrite halves the number of
+iterations but every remaining instruction still comes from SDRAM; moving a hot
+loop into bank `$00` is worth more than widening it, and costs no source
+changes at all. Bank `$00` is the scarce resource (KERNEL.md §3.1, and it is
+already spent), so this is not a licence to move everything — but it is the
+first thing to try on anything measured to be slow.
+
+**Two things these numbers do NOT say.** The old byte loop was never run on
+hardware, so the real-world gain from the rewrite is unmeasured; the 13.7x is
+an emulator figure. If the same ~4.3x applied to its 96.1 cycles/byte it would
+have been ~400, making the true gain far larger — but that is extrapolation.
+And the `MVN`-from-SDRAM rows are a *measurement of the fetch penalty*, not a
+reference the library should match; `run-membench.sh` labels them accordingly
+now, because as "MVNCOPY" they read as a target the library was failing to
+hit.
 
 ### Four bugs the rewrite produced, and what each one teaches
 

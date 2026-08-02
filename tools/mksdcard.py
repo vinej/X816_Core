@@ -76,6 +76,11 @@ TRY:
   RUN IRQTEST.BIN       INTERRUPTS AND BOTH CLOCKS -- GREEN IS PASS
   RUN CURTEST.BIN       THE CONSOLE CURSOR -- GREEN IS PASS
   RUN LIBIRQ.BIN        X16LIB IRQ/CLOCK OVER THE KERNEL -- GREEN IS PASS
+  RUN BANKBNCH.BIN      WHAT EXECUTING FROM SDRAM COSTS. FOUR HEX NUMBERS:
+                          TIME(BANK 01)  0001  TIME(BANK 00)  0000
+                        THE SAME LOOP, RUN FROM SDRAM THEN FROM BRAM.
+                        THE 0001/0000 ARE THE BANK IT REALLY RAN IN.
+                        ESC RETURNS TO THE PROMPT.
   RUN MEMBENCH.BIN      BLOCK-MOVE TIMINGS. NOT PASS/FAIL: SIX HEX NUMBERS,
                         MILLISECONDS FOR 4 X 32 KB, IN THIS ORDER --
                           LIBCOPY W16COPY MVNCOPY LIBFILL W16FILL MVNFILL
@@ -161,6 +166,10 @@ DEMOS = [
     # card because 7.0 cycles/byte is an EMULATOR figure -- uniform memory,
     # no SDRAM wait states -- and only the board says what MVN really costs.
     ("MEMBENCH.BIN", os.path.join(CALYPSI, "examples", "shell", "membench.bin")),
+    # BANKBENCH answers a question the emulator CANNOT: its memory is
+    # uniform, so it reports 1.00x by construction. Only the board has
+    # BRAM and SDRAM to tell apart.
+    ("BANKBNCH.BIN", os.path.join(CALYPSI, "examples", "shell", "bankbench.bin")),
     # Asks for every key the 64-entry keymap cannot express -- F-keys, the
     # arrows, the keypad, the right-hand modifiers -- and writes what the SMC
     # actually sent to /KEYMAP.TXT. Those codes are DISCARDED before any
