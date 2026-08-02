@@ -23,6 +23,10 @@ set_global_assignment -name VERILOG_FILE rtl/sdram.v
 # The kernel's monotonic clock at $9F90. Gated by nothing, which is the point
 # -- see the file, and doc/AUDIT.md L-4 for what it exists to avoid.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ms_timer.sv
+# The switchable 256 KB (doc/BRAM_SWITCH.md). NOT YET WIRED INTO x816.sv --
+# listed so the fitter reports whether its arrays infer as M10K, which is the
+# gate on the whole plan.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/switch_ram.sv
 
 # ---- Peripherals (carried over from the X16 core, unchanged) -------------
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via65c22.sv
