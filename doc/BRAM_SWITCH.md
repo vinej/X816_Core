@@ -12,11 +12,17 @@ by a mode bit:
 
 | mode | the 256 KB belongs to | VERA | banks `$01-$04` | for |
 |---|---|---|---|---|
-| **VIDEO** (default) | VERA | **352 KB**, exactly as today | SDRAM | high-resolution graphics |
-| **FAST** | the CPU | 128 KB, stock | **BRAM** | everything compute-bound |
+| **FAST** (default) | the CPU | 128 KB, stock | **BRAM** | everything, normally |
+| **VIDEO** | VERA | **352 KB**, exactly as today | SDRAM | 640×480 8bpp and the VERA816 extensions |
 
-In FAST mode a program gets **256 KB of 4.5×-speed code space plus 13 MB of
-SDRAM** for data. In VIDEO mode the machine is byte-for-byte what it is today.
+**FAST is the default.** The machine is a fast-CPU machine that can be put into
+a high-resolution graphics mode, not the other way round. In FAST a program
+gets **256 KB of 4.5×-speed code space plus 13 MB of SDRAM** for data; in
+VIDEO the machine is byte-for-byte what it is today.
+
+That choice has a consequence worth stating plainly: **out of the box,
+`SCANOUT.BIN`, `SCANFULL.BIN`, `SCAN4.BIN` and `REGWIN.BIN` will not run** —
+they need 352 KB. §4.1 is about how a program asks for the mode it needs.
 
 **The whole point is that FAST mode needs no source changes.** Programs already
 link to `$01:0000`; in FAST mode that address *is* BRAM. Every existing binary
@@ -104,6 +110,29 @@ Switched by the mode bit:
 invalidates whatever the block held. It is not a live toggle and should not
 pretend to be.
 
+### 4.1 How a program asks for VIDEO mode — open question
+
+With FAST as the default, a 640×480 program cannot simply be `run` from the
+prompt: the memory it needs does not exist until the mode changes and the
+machine resets. Three ways, in order of how much they ask of the user:
+
+1. **A flag in the image header.** `X816_MAGIC` is followed by an entry `jmp`
+   at +4; if a spare byte in that header declared "needs VIDEO", `cmd_run`
+   could set the mode, park the path somewhere that survives a CPU reset, and
+   reset. The kernel would come up in VIDEO and launch it. **Recommended** —
+   the user types `run SCANOUT.BIN` and it works, which is the only outcome
+   that does not turn into a support question.
+2. **A shell command** — `video` / `fast`, then reset, then `run`. Trivial to
+   build, and a fine first step while option 1 is designed.
+3. **The OSD.** Always available as a manual override, and probably wanted
+   regardless.
+
+Option 1 needs one thing this machine has not needed before: **state that
+survives a CPU reset.** A CPU reset does not clear SDRAM or bank `$00` BRAM,
+so a magic-guarded cell works — but it must be magic-guarded, because a cold
+power-on leaves that memory as noise and a stale "launch this" would be
+obeyed.
+
 ---
 
 ## 5. The six paths that need a mux
@@ -147,17 +176,25 @@ under.
    emulator timings become predictive instead of blind — without it, every
    future optimisation has the same hole that hid the MVN stub result.
 4. **RTL integration** — the six muxes in `x816.sv`. One Quartus round.
-5. **Boot and kernel** — who chooses the mode (OSD, SYSCTL at boot, or a
-   kernel decision), and the reset that follows.
+5. **Boot and kernel** — default to FAST; the shell command from §4.1 option
+   2; then the header flag and the reset-surviving launch cell from option 1.
 6. **Linker maps and docs** — a FAST-mode map, `MEMORY_MAP.md`, and a
    conformance test that proves a program really executed from BRAM. `BANKBNCH`
    already has the mechanism: it reports the bank it ran in, and the same trick
    proves the mode took effect.
 
-VERA2 is **not** in this plan. It becomes worth reopening once FAST mode
-exists and capacity is the limit again; `VERA_MEMORY_REVIEW.md` §2 still prices
-the rest of it honestly — burst reads on the SDRAM side, the byte-lane
-carve-out, `DISPBASE`, the `$9F60` bank, an emulator model, conformance tests.
+VERA2 is **phase 2** — after this is built and stable, not alongside it.
+`VERA_MEMORY_REVIEW.md` §2 still prices the rest of it honestly: burst reads on
+the SDRAM side, the byte-lane carve-out, `DISPBASE`, the `$9F60` bank, an
+emulator model, conformance tests.
+
+**And phase 2 is what makes VIDEO mode obsolete.** VERA2 puts a 1 MB
+framebuffer in SDRAM, so with FAST mode holding the CPU's code in BRAM you get
+a fast CPU *and* high resolution at the same time — the trade this whole
+document is about disappears. VIDEO mode then survives only as compatibility
+for whatever 352 KB VERA816 software exists by then. That is the argument for
+making FAST the default now rather than later: it is the mode the machine ends
+up in permanently.
 
 ---
 
@@ -173,6 +210,10 @@ carve-out, `DISPBASE`, the `$9F60` bank, an emulator model, conformance tests.
   `run-*.sh` verdict should name the mode.
 * **A program that assumes SDRAM timing.** Nothing in the tree does today, but
   anything hand-tuned against SDRAM stalls would change behaviour.
+* **The default flip is user-visible.** Someone flashing the core gets stock
+  128 KB VERA, and the high-resolution demos need a mode change. The kernel
+  should say which mode it booted in, and the card's help text must explain
+  it, or this reads as a regression rather than a choice.
 * **The 32 KB idle in VIDEO mode** is real waste. It buys a clean four-bank
   decode; if blocks turn out to be the binding constraint, this is the first
   thing to reconsider.
