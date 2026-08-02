@@ -20,6 +20,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/bank0_ram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/boot_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/flat_sdram.sv
 set_global_assignment -name VERILOG_FILE rtl/sdram.v
+# The kernel's monotonic clock at $9F90. Gated by nothing, which is the point
+# -- see the file, and doc/AUDIT.md L-4 for what it exists to avoid.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ms_timer.sv
 
 # ---- Peripherals (carried over from the X16 core, unchanged) -------------
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via65c22.sv

@@ -324,6 +324,7 @@ module emu
     wire vera_cs   = dec_valid & io_page & (cpu_a[7:5] == 3'b001); // $9F20-$9F3F
     wire ym_cs     = dec_valid & io_page & (cpu_a[7:4] == 4'h4);   // $9F40-$9F4F
     wire sysctl_cs = dec_valid & io_page & (cpu_a[7:4] == 4'h8);   // $9F80-$9F8F
+    wire timer_cs  = dec_valid & io_page & (cpu_a[7:4] == 4'h9) & (cpu_a[3:2] == 2'b00); // $9F90-$9F93
 
     // Boot ROM overlay: READ-ONLY shadow of $00:FF00-$00:FFFF.  Writes fall
     // through to the RAM underneath so the stub can copy itself down before
@@ -375,6 +376,34 @@ module emu
                            : (cpu_a[3:0] == 4'hE) ? dbg_push_r
                            : (cpu_a[3:0] == 4'hF) ? dbg_drop_r
                                         : 8'h00;
+
+    // ========================================================================
+    // Free-running millisecond timer ($00:9F90-$00:9F93, little-endian)
+    //
+    // The kernel's monotonic clock (doc/KERNEL.md 5.6).  It is a separate
+    // module for one reason: everything else in this file can only be proven
+    // by compiling a bitstream, and the property that matters here -- that the
+    // count keeps advancing while cpu_rdy is LOW, so an SD transfer does not
+    // steal time (doc/AUDIT.md L-4) -- is exactly the one a screen cannot
+    // show.  sim/tb_ms_timer.v drives it directly instead.  rtl/ms_timer.sv
+    // carries the full argument.
+    //
+    // The divider is passed explicitly rather than left to the module's
+    // default so that tools/contract.py can check THIS instantiation: a wrong
+    // override here would leave TIME_GET answering confidently in the wrong
+    // unit, which nothing downstream could detect.
+    // ========================================================================
+    wire [7:0] timer_data;
+
+    ms_timer #(.TIMER_DIV(13'd8000)) u_timer (
+        .clk     (cpu_clk),
+        .reset_n (cpu_reset_n),
+        .cs      (timer_cs),
+        .rd      (cpu_rwn),
+        .cpu_rdy (cpu_rdy),
+        .addr    (cpu_a[1:0]),
+        .rd_data (timer_data)
+    );
 
     sd_block u_sd (
         .clk          (cpu_clk),
@@ -955,6 +984,7 @@ module emu
                     via1_cs    ? via1_data     :
                     via2_cs    ? via2_data     :
                     sysctl_cs  ? sysctl_data   :
+                    timer_cs   ? timer_data    :
                     bank0_cs   ? bank0_data    :
                     flat_cs    ? sdram_data    :
                                  open_bus_r;

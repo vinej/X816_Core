@@ -248,8 +248,86 @@ X16 register offsets port over unchanged; $9F80-$9F8F is X816's own.""",
         Const("X816_SD_GAP", 0x9F8B, 4, "MUST STAY UNMAPPED -- see sd_block.sv"),
         Const("X816_SD_DATA", 0x9F8C, 4, "block-buffer window, auto-incrementing"),
         Const("X816_KBD_COUNT", 0x9F8D, 4, "keyboard diagnostic counters, $9F8D-$9F8F"),
+        # The free-running millisecond timer. NOT in the $9F8x block: that
+        # block is full ($9F8D-$9F8F took the last three), so this opens the
+        # $9F9x nibble. It is deliberately below the emulator's debug device
+        # at $9FB0, which is emulator-only and must stay reachable.
+        Const("X816_TIMER", 0x9F90, 4, "$9F90-$9F93 free-running ms counter, LE"),
+        Const("X816_TIMER_LAST", 0x9F93, 4, "reading $9F90 latches bits 31:8"),
+        Const("X816_TIMER_DIV", 8000, 4,
+              "cpu_clk cycles per tick: 8.000 MHz / 8000 = 1 kHz exactly",
+              base=10),
+        Const("X816_TIMER_HZ", 1000, 4, "so the unit is a millisecond", base=10),
         Const("X816_BOOT_BASE", 0xFF00, 4, "boot ROM read overlay, bank $00"),
         Const("X816_BOOT_SIZE", 0x100, 3, "and it is exactly one page"),
+    ])
+
+# ---- the pieces of the I/O page the interrupt dispatcher touches -------------
+group(
+    "Interrupt hardware",
+    """VERA's interrupt registers and the VIA's, by the offsets the stock X16
+uses -- the I/O page is byte-for-byte the X16's for $9F00-$9F7F, so these are
+inherited rather than chosen. The kernel's dispatcher (runtime/kirq.s) is the
+one thing that has to know all of them at once, because it is the only code
+that sees an interrupt before anybody has said which device caused it.""",
+    [
+        Const("X816_VERA_IEN", 0x9F26, 4, "VERA interrupt enable"),
+        Const("X816_VERA_ISR", 0x9F27, 4, "VERA interrupt status; write 1 to clear"),
+        Const("X816_VERA_IRQ_VSYNC", 0x01, 2, "", base=10),
+        Const("X816_VERA_IRQ_LINE", 0x02, 2, "", base=10),
+        Const("X816_VERA_IRQ_SPRCOL", 0x04, 2, "", base=10),
+        # AFLOW is the one that cannot be acknowledged by writing ISR: it
+        # clears only when something refills the audio FIFO. See kirq.s.
+        Const("X816_VERA_IRQ_AFLOW", 0x08, 2, "clears by REFILLING, not by ack", base=10),
+        Const("X816_VIA_IFR", 0x0D, 2, "offset within a VIA: interrupt flags", base=10),
+        Const("X816_VIA_IER", 0x0E, 2, "offset within a VIA: interrupt enable", base=10),
+        Const("X816_YM_TIMER_REG", 0x14, 2, "YM2151 register holding its IRQ resets", base=10),
+    ])
+
+# ---- the 65816 vectors ------------------------------------------------------
+group(
+    "65816 native vectors",
+    """Hardware addresses, not ours to place, and SIXTEEN bits wide -- which
+is the constraint that shapes doc/KERNEL.md section 5.6: the CPU jumps into
+bank $00 for every interrupt, so the kernel's first-level handler cannot live
+in the firmware region with the rest of the kernel. kirq_install stamps a
+four-byte `jmp long:` trampoline into bank $00 for each of these and points
+the vector at it. ABORT is listed because it must keep trapping: x816.sv ties
+abort_n high, so there is no ABORT source and nothing should install one.""",
+    [
+        Const("X816_VEC_COP", 0x00FFE4, 6, ""),
+        Const("X816_VEC_BRK", 0x00FFE6, 6, ""),
+        Const("X816_VEC_ABORT", 0x00FFE8, 6, "no source; stays trapping"),
+        Const("X816_VEC_NMI", 0x00FFEA, 6, ""),
+        Const("X816_VEC_IRQ", 0x00FFEE, 6, ""),
+    ])
+
+# ---- the kernel's interrupt vector table ------------------------------------
+group(
+    "Interrupt vector slots",
+    """IRQ_SET's index space (doc/KERNEL.md section 5.6). One slot per SOURCE
+rather than one per CPU vector, because the CPU has a single IRQ vector and
+seven things behind it: deciding which fired is the dispatcher's job, and a
+program that wants the raster split should not have to also service the
+audio FIFO to get it. Slot numbers are ABI -- appending is fine, renumbering
+is not.""",
+    [
+        Const("KIRQ_VSYNC", 0, 1, "VERA vertical blank", base=10),
+        Const("KIRQ_LINE", 1, 1, "VERA raster line compare", base=10),
+        Const("KIRQ_SPRCOL", 2, 1, "VERA sprite collision", base=10),
+        Const("KIRQ_AFLOW", 3, 1, "VERA audio FIFO low", base=10),
+        Const("KIRQ_VIA1", 4, 1, "VIA #1 -- timers, SNES pads, I2C to the SMC", base=10),
+        Const("KIRQ_VIA2", 5, 1, "VIA #2 -- user port", base=10),
+        Const("KIRQ_YM", 6, 1, "YM2151 timer", base=10),
+        Const("KIRQ_SPURIOUS", 7, 1, "an IRQ that no enabled source claimed", base=10),
+        Const("KIRQ_NMI", 8, 1, "SMC NMI request -- edge, nothing to acknowledge", base=10),
+        Const("KIRQ_BRK", 9, 1, "BRK", base=10),
+        Const("KIRQ_COP", 10, 1, "COP", base=10),
+        Const("KIRQ_SLOTS", 11, 2, "slots in the table", base=10),
+        Const("KIRQ_SLOT_SIZE", 4, 1,
+              "bytes per slot: a 24-bit handler in a power-of-two stride, so "
+              "the index scales with two shifts and not a multiply", base=10),
+        Const("KIRQ_TRAMPOLINE_SIZE", 4, 1, "`jmp long:` -- opcode plus 24 bits", base=10),
     ])
 
 # ---- paths ------------------------------------------------------------------
@@ -309,6 +387,10 @@ CALLS = [
     (40, "K_MEM_ALLOC",   "k_mem_alloc",   "C:X = 32-bit size -> C:X = address"),
     (41, "K_MEM_FREE",    "k_mem_free",    "C:X = address"),
     (48, "K_SYS_VERSION", "k_sys_version", "-> C = (major << 8) | minor"),
+    (49, "K_IRQ_SET",     "k_irq_set",     "C = KIRQ_ slot, X:Y = handler -> C:X = previous"),
+    (50, "K_TIME_GET",    "k_time_get",    "-> C = ms low 16, X = ms high 16"),
+    (51, "K_TIME_SET",    "k_time_set",    "C = ms low 16, X = ms high 16"),
+    (52, "K_IRQ_FRAMES",  "k_irq_frames",  "-> C = VSYNC frames, 16-bit, wraps"),
 ]
 
 CALL_GROUPS = [
@@ -805,6 +887,27 @@ def sites():
              r"sysctl_cs\s*=.*cpu_a\[7:4\] == 4'h([0-9a-fA-F])\)",
              "SYSCTL decode; boot.s stores to it to drop the overlay",
              parse=lambda s: 0x9F00 | (int(s, 16) << 4)),
+        # The free-running timer. Its ADDRESS and its RATE are both checked:
+        # a timer at the right address ticking at the wrong rate is worse than
+        # one that is missing, because TIME_GET keeps answering and every
+        # answer is wrong by a constant factor nobody measures.
+        Site(_k("x816.sv"), "X816_TIMER",
+             r"timer_cs\s*=.*cpu_a\[7:4\] == 4'h([0-9a-fA-F]\).*cpu_a\[3:2\] == 2'b00)",
+             "the millisecond counter's decode",
+             parse=lambda s: 0x9F00 | (int(s[0], 16) << 4)),
+        # The divider is checked in BOTH places: the module's default, and the
+        # value x816.sv actually passes. Checking only the default would miss
+        # a wrong override at the instantiation, and checking only the
+        # instantiation would miss the module being reused elsewhere with a
+        # default nobody looked at.
+        Site(_k("rtl", "ms_timer.sv"), "X816_TIMER_DIV",
+             r"parameter \[12:0\] TIMER_DIV\s*=\s*13'd(\d+)",
+             "cpu_clk cycles per millisecond tick, the module default",
+             parse=lambda s: int(s, 10)),
+        Site(_k("x816.sv"), "X816_TIMER_DIV",
+             r"ms_timer #\(\.TIMER_DIV\(13'd(\d+)\)\)",
+             "...and the value the core actually instantiates it with",
+             parse=lambda s: int(s, 10)),
     ]
 
     # ---- ln65816 linker scripts: Scheme, cannot include a C header ----------
@@ -902,6 +1005,9 @@ def sites():
         Wired(_c("runtime", "kerntab.s"),
               ["x816_contract.inc", "x816_kerntab.inc"], "calypsi",
               "the table's ORDER is the ABI the header numbers"),
+        Wired(_c("runtime", "kirq.s"), ["x816_contract.inc"], "calypsi",
+              "the dispatcher indexes by the same KIRQ_ slot numbers the "
+              "library publishes to programs"),
         Wired(_c("runtime", "kcall.s"), ["x816_contract.inc"], "calypsi",
               "kern_call computes the table address itself"),
         Wired(_c("runtime", "exec.s"), ["x816_contract.inc"], "calypsi",

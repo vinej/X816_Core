@@ -73,6 +73,15 @@ TRY:
   RUN CHARMAP.BIN       EVERY CP437 CHARACTER, WITH ITS HEX CODE
   RUN KERNTEST.BIN      KERNEL JUMP TABLE -- GREEN IS PASS
   RUN KFSTEST.BIN       KERNEL FILE CALLS -- GREEN IS PASS
+  RUN IRQTEST.BIN       INTERRUPTS AND BOTH CLOCKS -- GREEN IS PASS
+  RUN CURTEST.BIN       THE CONSOLE CURSOR -- GREEN IS PASS
+  RUN LIBIRQ.BIN        X16LIB IRQ/CLOCK OVER THE KERNEL -- GREEN IS PASS
+  RUN MEMBENCH.BIN      BLOCK-MOVE TIMINGS. NOT PASS/FAIL: SIX HEX NUMBERS,
+                        MILLISECONDS FOR 4 X 32 KB, IN THIS ORDER --
+                          LIBCOPY W16COPY MVNCOPY LIBFILL W16FILL MVNFILL
+                        LIBCOPY AND MVNCOPY SHOULD MATCH: THE LIBRARY USES
+                        MVN NOW. W16 IS A 16-BIT LOOP, FOR COMPARISON.
+                        ESC RETURNS TO THE PROMPT.
   RUN LIBFS.BIN         X16LIB OVER THE KERNEL -- GREEN IS PASS
   RUN KEYSCAN.BIN       WHAT EVERY KEY SENDS -> /KEYMAP.TXT
   RUN BLITTEST.BIN      VERA BLITTER + SPRITE REACH -- GREEN IS PASS
@@ -137,11 +146,21 @@ DEMOS = [
     # colours. On the card it meets the RESIDENT kernel, which is the one
     # thing the emulator run cannot cover: there it links a private copy.
     ("MEMTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "memtest.bin")),
+    # IRQTEST is on the card for a reason MEMTEST is not: the millisecond
+    # counter it cross-checks is REAL HARDWARE (rtl/ms_timer.sv), and the
+    # frame rate it is checked against is the real 59.52 Hz VERA frame.
+    ("IRQTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "irqtest.bin")),
+    ("CURTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "curtest.bin")),
     # The same ground through the reshaped x16lib memory API -- mem_alloc,
     # mem_fill, mem_copy (including an overlapping range), mem_crc against a
     # published check value. On the card it runs against the RESIDENT kernel;
     # run-libmem.sh links a private copy.
     ("LIBMEM.BIN",  os.path.join(CALYPSI, "examples", "shell", "libmem.bin")),
+    ("LIBIRQ.BIN",  os.path.join(CALYPSI, "examples", "shell", "libirq.bin")),
+    # MEMBENCH is not a pass/fail test: it prints six timings. It is on the
+    # card because 7.0 cycles/byte is an EMULATOR figure -- uniform memory,
+    # no SDRAM wait states -- and only the board says what MVN really costs.
+    ("MEMBENCH.BIN", os.path.join(CALYPSI, "examples", "shell", "membench.bin")),
     # Asks for every key the 64-entry keymap cannot express -- F-keys, the
     # arrows, the keypad, the right-hand modifiers -- and writes what the SMC
     # actually sent to /KEYMAP.TXT. Those codes are DISCARDED before any

@@ -112,7 +112,8 @@ offsets and any driver written against them port over unchanged.
 | `$9F40-$9F4F` | 16 B | YM2151 (IKAOPM) |
 | `$9F50-$9F7F` | 48 B | unmapped — open bus |
 | `$9F80-$9F8F` | 16 B | SYSCTL (X816-specific, see below) |
-| `$9F90-$9FFF` | 112 B | unmapped — open bus |
+| `$9F90-$9F93` | 4 B | free-running millisecond timer (see below) |
+| `$9F94-$9FFF` | 108 B | unmapped — open bus |
 
 Unmapped reads return the last byte on the data bus (floating-bus emulation),
 not `$00` — returning zero makes device-probing code false-positive.
@@ -120,6 +121,39 @@ not `$00` — returning zero makes device-probing code false-positive.
 **SYSCTL `$9F80`** — bit 0 boot ROM overlay enable (1 at reset, write 0 to drop
 it); bit 1 reads the CPU's live E flag, so software can assert it is really in
 native mode.
+
+### Millisecond timer — `$9F90-$9F93`
+
+`rtl/ms_timer.sv`, and `timer_step`/`timer_read` in the emulator's
+`src/memory.c`. A 32-bit little-endian count of milliseconds since reset,
+read-only. `cpu_clk` is 8.000 MHz and the divider is 8000, so the tick is 1 kHz
+exactly and 32 bits is 49.7 days.
+
+| Range | |
+|---|---|
+| `$9F90` | `MS[7:0]` — **reading this latches bits 31:8** |
+| `$9F91-$9F93` | `MS[31:8]`, from that latch |
+
+**It is gated by nothing.** Not `cpu_rdy`, not a chip select — just `cpu_clk`
+and reset. That is the entire point of the device and not an oversight: both
+VIAs take `.enable(cpu_rdy)` and stop dead for the whole length of an SD
+transfer (`doc/AUDIT.md` L-4), and VERA's VSYNC interrupt is a single latch, so
+a freeze spanning four frames still presents one interrupt and loses the other
+three. Every timebase this machine already had ran slow in proportion to card
+activity, silently. The keyboard diagnostic counters at `$9F8D-$9F8F` are the
+same shape and the precedent.
+
+**Software must read `$9F90` first, and that is normative.** The counter does
+not pause for a four-byte read, so a read straddling a carry (`$..FF` → `$..00`
+between two byte reads) returns a value that was never true and can go
+*backwards* — fatal in a monotonic clock and intermittent enough to survive
+testing. Reading the low byte captures bits 31:8 into a shadow, so a 16-bit
+`lda $9F90` followed by a 16-bit `lda $9F92` yields one coherent 32-bit value.
+That is what `runtime/kirq.s` does for `TIME_GET`.
+
+Proven on the real RTL by `sim/run.sh timer`: the rate, the latch checked
+across a carry, and the count still advancing while `cpu_rdy` is held low —
+measured twice, stalled and running, and required to agree.
 
 ### SD block device — `$9F81-$9F8C`
 

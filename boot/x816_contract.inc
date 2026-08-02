@@ -77,8 +77,46 @@ X816_SD_STATUS      = $9F8A        ; READ ONLY. b0 busy, b1 error, b7 present
 X816_SD_GAP         = $9F8B        ; MUST STAY UNMAPPED -- see sd_block.sv
 X816_SD_DATA        = $9F8C        ; block-buffer window, auto-incrementing
 X816_KBD_COUNT      = $9F8D        ; keyboard diagnostic counters, $9F8D-$9F8F
+X816_TIMER          = $9F90        ; $9F90-$9F93 free-running ms counter, LE
+X816_TIMER_LAST     = $9F93        ; reading $9F90 latches bits 31:8
+X816_TIMER_DIV      = 8000         ; cpu_clk cycles per tick: 8.000 MHz / 8000 = 1 kHz exactly
+X816_TIMER_HZ       = 1000         ; so the unit is a millisecond
 X816_BOOT_BASE      = $FF00        ; boot ROM read overlay, bank $00
 X816_BOOT_SIZE      = $100         ; and it is exactly one page
+
+; ---- Interrupt hardware
+X816_VERA_IEN        = $9F26       ; VERA interrupt enable
+X816_VERA_ISR        = $9F27       ; VERA interrupt status; write 1 to clear
+X816_VERA_IRQ_VSYNC  = 1
+X816_VERA_IRQ_LINE   = 2
+X816_VERA_IRQ_SPRCOL = 4
+X816_VERA_IRQ_AFLOW  = 8           ; clears by REFILLING, not by ack
+X816_VIA_IFR         = 13          ; offset within a VIA: interrupt flags
+X816_VIA_IER         = 14          ; offset within a VIA: interrupt enable
+X816_YM_TIMER_REG    = 20          ; YM2151 register holding its IRQ resets
+
+; ---- 65816 native vectors
+X816_VEC_COP   = $00FFE4
+X816_VEC_BRK   = $00FFE6
+X816_VEC_ABORT = $00FFE8           ; no source; stays trapping
+X816_VEC_NMI   = $00FFEA
+X816_VEC_IRQ   = $00FFEE
+
+; ---- Interrupt vector slots
+KIRQ_VSYNC           = 0           ; VERA vertical blank
+KIRQ_LINE            = 1           ; VERA raster line compare
+KIRQ_SPRCOL          = 2           ; VERA sprite collision
+KIRQ_AFLOW           = 3           ; VERA audio FIFO low
+KIRQ_VIA1            = 4           ; VIA #1 -- timers, SNES pads, I2C to the SMC
+KIRQ_VIA2            = 5           ; VIA #2 -- user port
+KIRQ_YM              = 6           ; YM2151 timer
+KIRQ_SPURIOUS        = 7           ; an IRQ that no enabled source claimed
+KIRQ_NMI             = 8           ; SMC NMI request -- edge, nothing to acknowledge
+KIRQ_BRK             = 9           ; BRK
+KIRQ_COP             = 10          ; COP
+KIRQ_SLOTS           = 11          ; slots in the table
+KIRQ_SLOT_SIZE       = 4           ; bytes per slot: a 24-bit handler in a power-of-two stride, so the index scales with two shifts and not a multiply
+KIRQ_TRAMPOLINE_SIZE = 4           ; `jmp long:` -- opcode plus 24 bits
 
 ; ---- Card layout
 

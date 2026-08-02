@@ -75,7 +75,7 @@ inspection. The rule only has to decide the other 19:
 |---|---|---|
 | `storage/dos`, `dir`, `fileio`, `load` | **kernel** | one FAT32 owner; state outlives the program |
 | `storage/bank`, `mem` | **kernel** | the allocator — but reshaped, see below |
-| `system/irq`, `system/clock` | **kernel** | one vector table, one time source |
+| `system/irq`, `system/clock` | **kernel** | one vector table, one time source (§11.5) |
 | `input/keyboard` (buffer), `comms/i2c` | **kernel** | the SMC I²C bus is shared with the keyboard |
 | `gfx/console` | **kernel** | owns the prompt's screen when no program has taken it |
 | `storage/bmx` | library | a *format* parser; its 36 KERNAL calls are all "give me the next byte" |
@@ -343,10 +343,134 @@ the policy is one the kernel has no business freezing.
 
 Nothing is zeroed, and there is no `realloc`.
 
-### 5.6 System
+### 5.6 System and interrupts
 
-`SYS_VERSION`, `TIME_GET`, `TIME_SET`, `IRQ_SET` (`C` = vector index,
-`X:Y` = 24-bit handler), `SYS_RESET`.
+| Call | Arguments | Returns |
+|---|---|---|
+| `SYS_VERSION` | — | `C` = (major << 8) \| minor |
+| `IRQ_SET` | `C` = slot, `X` = handler low 16, `Y` = handler bank | `C:X` = the **previous** handler |
+| `TIME_GET` | — | `C` = ms low 16, `X` = ms high 16 |
+| `TIME_SET` | `C` = ms low 16, `X` = ms high 16 | — |
+| `IRQ_FRAMES` | — | `C` = VSYNC frames, 16-bit, wraps |
+
+`SYS_RESET` is named but not numbered; nothing needs it yet.
+
+**One slot per SOURCE, not one per CPU vector.** The 65816 has a single IRQ
+vector with seven devices behind it — VERA's VSYNC, raster line, sprite
+collision and audio-FIFO-low, both VIAs, and the YM2151 — and deciding which
+one fired is the kernel's job. A program that wants a raster split should not
+have to service the audio FIFO to get it.
+
+| Slot | | Slot | |
+|---|---|---|---|
+| `KIRQ_VSYNC` | 0 | `KIRQ_YM` | 6 |
+| `KIRQ_LINE` | 1 | `KIRQ_SPURIOUS` | 7 |
+| `KIRQ_SPRCOL` | 2 | `KIRQ_NMI` | 8 |
+| `KIRQ_AFLOW` | 3 | `KIRQ_BRK` | 9 |
+| `KIRQ_VIA1` | 4 | `KIRQ_COP` | 10 |
+| `KIRQ_VIA2` | 5 | | |
+
+Slot numbers are ABI. Appending is fine; renumbering is not. Installing `0`
+clears a slot, which is why zero is not a legal handler address — nothing can
+be executing at `$00:0000`, that is the direct page. `IRQ_SET` returns the
+previous handler because a caller cannot reconstruct it afterwards and it
+costs nothing to hand back.
+
+**The environment a handler runs in is normative:** native mode, `M=0` and
+`X=0`, `D` = `$0000`, `DBR` = `$00`, reached by `jsl` so it must finish with
+`rtl`. `A`, `X` and `Y` are free — the dispatcher saved the interrupted code's.
+
+`D = $0000` rather than the kernel's direct page is a decision, not an
+accident. It is what the X16 KERNAL does before calling `CINV`, it is what
+x16lib's zero-page scratch needs, and above all it does not depend on what was
+running when the interrupt landed — a handler that assumed it inherited the
+interrupted code's `D` would work until the interrupt arrived during a kernel
+call. **A handler must not enable interrupts**; there is one dispatch scratch
+pointer and one ISR snapshot.
+
+**The dispatcher touches VERA's `ISR` and `IEN`, the VIAs' `IFR`/`IER`, and the
+YM's status — and nothing else.** In particular it never goes near VERA's
+address registers or data ports at `$9F20-$9F24`. That is a requirement: an
+interrupt can land between a console write setting the VERA address and the
+store that uses it, and a dispatcher that reprogrammed the address port would
+corrupt the interrupted write with no trace. Handlers get no such protection
+for free.
+
+#### The stuck-source defence
+
+Every IRQ source here is **level** sensitive. If one asserts and nothing clears
+it, `rti` returns to an instruction that is immediately interrupted again,
+forever — a machine that is completely dead with no diagnostic and no way in.
+That is the worst failure the kernel can produce, so it is designed out:
+
+| Source | How it is prevented from hanging the machine |
+|---|---|
+| VSYNC, LINE, SPRCOL | acknowledged by the dispatcher itself, **always**, before any handler runs and whether or not one is installed |
+| AFLOW | cannot be acknowledged at all — it clears only when the audio FIFO is refilled. With no handler, its **enable** bit is cleared |
+| VIA1, VIA2 | only the VIA's own registers can clear it. With no handler, `$7F` goes to `IER`, disabling all of that VIA's sources |
+| YM2151 | with no handler, register `$14` gets `$30`: both timer flags reset and both timer IRQ enables cleared |
+
+Each records a bit in `kirq_disabled`, so a test can prove the defence fired
+rather than inferring it from a machine that did not hang. The cost is a
+footgun worth naming: **enable a source after installing its handler, never
+before**, or the first interrupt turns the source back off.
+
+#### The first thing built on it: the console cursor
+
+`runtime/ccursor.s`, switched on by `ccur_on()` and installed in
+`KIRQ_VSYNC`. It is worth reading as the worked example of a handler, because
+it has to break the rule stated just above — drawing *is* touching VERA — and
+shows what a handler must do instead.
+
+It draws by writing the **reversed attribute** to the cell's second byte, so
+the glyph underneath is never touched and "undraw" is a constant rather than
+something to remember. That also makes scrolling free: every cell carries the
+same attribute, so a scrolled cursor cell needs no fixing up.
+
+It uses VERA's **port 1**, because `console.c` drives everything through port
+0 — and it still saves and restores both `CTRL` *and* port 1's address,
+because `con_scroll` uses port 1 as its copy destination. The two together
+make the handler invisible to a half-finished `con_putc` and to a scroll in
+progress. The alternative is a console that corrupts one character in a few
+thousand, only while the cursor happens to blink.
+
+`run-cur.sh` (`CURTEST.BIN`, with `--negative`) covers it in five checks: the
+cell takes **both** attribute values over time — a cursor drawn once and never
+undrawn passes "the attribute is reversed" and is not a cursor; the glyph
+survives; it follows the console, settling the cell it left; `ccur_off` leaves
+no trace; and text printed **while it is blinking** comes back byte-for-byte,
+which is what pays for all the save/restore.
+
+#### The two clocks, and why there are two
+
+`TIME_GET` reads a **free-running hardware counter at `$00:9F90`**
+([rtl/ms_timer.sv](../rtl/ms_timer.sv), [MEMORY_MAP.md](MEMORY_MAP.md) §2),
+gated by nothing — not `cpu_rdy`, not a chip select. `IRQ_FRAMES` reads a
+VSYNC count the dispatcher maintains.
+
+They are different clocks on purpose, and **they disagree during an SD
+transfer**: the CPU and both VIAs are frozen for its whole length, so the
+frame count stops and the millisecond count does not. Anything measuring
+duration wants milliseconds; anything that must not tear — a raster effect, a
+page flip — wants frames.
+
+This is the disposition of `doc/AUDIT.md` L-4, which accepted the VIA freeze
+on the grounds that nothing kept time yet. Something does now, and it is
+built on the one counter the freeze cannot reach. A jiffy count driven from
+VERA's VSYNC would not have done: VSYNC is a single latch, so a freeze
+spanning four frames still presents one interrupt and the other three are
+lost.
+
+`TIME_SET` moves the kernel's **epoch** rather than the counter — the counter
+is read-only, and making it writable would have cost a write path into a
+register whose entire value is that nothing can perturb it. Reads afterwards
+are offset by the difference; 32-bit two's complement wraps correctly, so
+setting a time earlier than the hardware count needs no sign anywhere.
+
+**Reading `$9F90` first is normative.** The low byte's read latches bits 31:8
+into a shadow that `$9F91-$9F93` return, so two 16-bit reads give one coherent
+32-bit value. Read them the other way round and a value straddling a carry
+comes back that was never true — and can go backwards.
 
 ---
 
@@ -435,6 +559,7 @@ on the kernel.
 5. Directory enumeration terminating exactly once at the end
 6. `EXEC` of a known image landing at its entry point
 7. `MEM_ALLOC`/`MEM_FREE` returning distinct non-overlapping ranges
+8. Interrupts dispatched to the right slot, and both clocks running
 
 **A test that cannot fail proves nothing** — each one needs its negative
 control, as `run-emu.sh --negative` does in X816_Calypsi.
@@ -455,6 +580,51 @@ right `KERR_`; a refused allocation leaves the heap byte-identical; the table
 fills, refuses with `KERR_NOSPACE`, and recovers completely; and filling eight
 adjacent blocks disturbs none of them — which is the check that would find
 bookkeeping living inside the arena.
+
+Test 8 is **written and green** at three levels, because interrupts are the
+one subsystem where the RTL, the ABI and the library each have a failure the
+other two cannot see.
+
+`X816_Calypsi/examples/kernel/irqtest.c`, run by `run-irq.sh` (with
+`--negative`) and shipped as `IRQTEST.BIN`, covers the **ABI** in nine checks:
+the four CPU vectors really point at installed trampolines and ABORT does not;
+`IRQ_FRAMES` advances, which proves VSYNC is both dispatched *and*
+acknowledged; an installed handler runs; `IRQ_SET` reports the previous
+handler, and **clearing a slot stops the handler while the frame count keeps
+advancing**; `BRK` dispatches and execution *resumes*; `TIME_GET` advances
+monotonically and agrees with the frame counter; `TIME_SET` moves the epoch;
+an out-of-range slot is refused with `KERR_BADARG`; and AFLOW enabled with
+nothing to service it gets disabled rather than locking the machine.
+
+The fourth of those is the one that matters most, and its shape is the lesson.
+"An installed handler runs" passes for a dispatcher that calls every slot
+unconditionally, or that ignores the table and calls a hard-wired address.
+Only *the counter stops when the slot is cleared* separates a dispatcher that
+reads the table from one that merely happens to reach the right code — and
+requiring the frame count to keep advancing at the same time is what stops
+that check being satisfied by interrupts having quietly died.
+
+`sim/run.sh timer` covers the **RTL**, on `rtl/ms_timer.sv` directly: the
+divider's rate, the read latch checked *across a carry*, and — the property
+the whole device exists for — that the count keeps advancing while `cpu_rdy`
+is held low. That last one cannot be tested from software on hardware, because
+the software that would look is itself frozen. It is measured twice, stalled
+and running, and the two must agree.
+
+`examples/kernel/libirq.s` (`run-libirq.sh`, `--negative`, `LIBIRQ.BIN`)
+covers the **library**, and exists for one property neither of the others
+reaches: the 8-bit/16-bit crossing running *inward*. Everywhere else in the
+tree, 8-bit library code calls a 16-bit kernel; an interrupt handler is the
+kernel calling into the library, and the trampolines in `system/x816kernel.asm`
+must `sep` down, run 65C02 code, `rep` back and `rtl`. Get that wrong and the
+dispatcher's own stack pulls take the wrong number of bytes — silently, and
+not where the mistake is.
+
+All three negative controls patch the **code under test**, not the test's
+expectation: `run-irq.sh` makes the VSYNC path dispatch through the spurious
+slot, `run-libirq.sh` cuts the LINE trampoline before it reaches the library,
+and the RTL control gates the counter with `cpu_rdy`. Each was run and each
+turned exactly one check red.
 
 ---
 
@@ -493,8 +663,9 @@ a real, working, wrong routine. Adding or moving a call now means editing the
 **Implemented:** the eight console entries 0–7, the fifteen filesystem
 entries 16–30, `EXEC` (32, `runtime/kexec.c`) and `EXIT` (33, a guarded
 restart through the firmware entry), `MEM_ALLOC` and `MEM_FREE` (40/41,
-`runtime/kmem.c`, §5.5) and `SYS_VERSION` (48) returning
-`$0001`. Everything else is `k_nosys` — carry set, `C` = `KERR_NOSYS`.
+`runtime/kmem.c`, §5.5), `SYS_VERSION` (48) returning `$0001`, and
+`IRQ_SET`/`TIME_GET`/`TIME_SET`/`IRQ_FRAMES` (49–52, `runtime/kirq.s`, §5.6).
+Everything else is `k_nosys` — carry set, `C` = `KERR_NOSYS`.
 All 64 slots are filled, so calling an unimplemented number is a clean refusal
 rather than a jump into whatever bank `$00` happened to contain, and filling a
 slot later is not an ABI break.
@@ -503,6 +674,34 @@ The table is stamped into `$00:FE00` at run time by `kern_install`, because the
 HPS loader only ever writes bank `$01` — bank `$00` comes up as whatever was
 there, so the linker cannot place it. The linker script does reserve the page
 (HiRAM now stops at `$FDFF`) so no `near` object lands on top of it.
+
+`kirq_install` is a **separate** call and deliberately so: `kern_install` only
+writes a table nobody executes until it is called, whereas `kirq_install`
+repoints the CPU's own vectors and finishes with `cli`. A program that links
+the table privately and does not want interrupts must be able to have one
+without the other. `runtime/kernel.h` declares both; `examples/shell/kernelmain.c`
+calls both.
+
+**The interrupt vectors cannot live with the rest of the kernel, and that is
+structural.** The 65816's native vectors at `$00:FFE4-$00:FFEF` are *sixteen
+bits* — the CPU jumps into bank `$00` for every interrupt, full stop, and no
+register supplies a bank. The kernel's code is at `$F0:0000`, which a 16-bit
+vector cannot name. So `kirq_install` stamps a four-byte `jmp long:`
+trampoline into bank `$00` for each vector and points the vector at that:
+the same technique `kern_install` and `x816_exec_init` already use, and for
+the same reason.
+
+**§3.1's budget is now the binding constraint, and this is what hit it
+first.** Measured before `kirq.s` existed, the resident kernel's KernRAM
+(`$2100-$2FFF`) was **99% full — 38 bytes free**, against the 92 the vector
+table, the trampolines and the dispatch scratch need. But the other half of
+the same claim, the kernel's direct page at `$2000-$20FF`, was 7.8% used:
+Calypsi's pseudo-registers take 20 bytes of 256 and the remaining 236 were
+doing nothing. So `kirq.s` puts its state in `ztiny` when assembled
+`-DKERNEL_RESIDENT` and in `near` otherwise — the same assembly-time split
+`kerntab.s` makes with `KENTER`/`KLEAVE`, and it required no growth of the
+claim and evicted nothing. The next thing to need bank `$00` will not be so
+lucky: `shell.o` alone holds 1,372 bytes of initialised `data` there.
 
 **Residency — FIXED as of 2026-08-01.** The kernel now ships as a firmware
 image: `runtime/x816-kernel.scm` links the shell into banks `$F0+` (magic at
@@ -608,12 +807,73 @@ the rest of the tree.
 | `storage/load` | **No longer blocked** — this row said "`EXEC` is not implemented" and that stopped being true when `K_EXEC` landed (§10). What remains is the redesign it also names: `LOAD`/`SAVE` carry PRG headers, BASIC `SYS` stubs and VRAM loads through `LOAD`'s A register, none of which describe this machine. The X816 answer is `EXEC` plus flat addresses, so the module's interface changes rather than its innards — same shape as `fileio`, which is done. |
 | `storage/dos` | the DOS command channel: `"S:FILE"` strings sent to a drive. The native equivalents are `FS_DELETE`, `FS_RENAME`, `FS_MKDIR`, so the module's whole *interface* changes. |
 | `storage/bmx` | ~30 `CHRIN`/`READST` sites. Mechanical — `fio_getc` and `fio_read` are already there — but 942 lines, and it is a library either way (§2.3). |
-| `system/irq`, `clock` | need `IRQ_SET` and the time source (§5.6), neither of which exists. Note L-4 in `doc/AUDIT.md` before designing the clock: SD transfers freeze the VIAs, so a VIA-derived time source drifts with card activity. |
 
-`core/const_kernal.asm` is still sourced, so those four still assemble against
+`core/const_kernal.asm` is still sourced, so those three still assemble against
 the KERNAL symbols. Removing it is the last step, not the first: a build that
 had to choose between the two tables could not contain a module halfway
 between them.
+
+### 11.5 `system/irq` and `system/clock` — done
+
+**Converted 2026-08-02**, and both shrank, which is the interesting part.
+
+`irq.asm` chained onto the KERNAL's `CINV`: it took over `$0314`, serviced its
+own sources, and jumped to whatever was there before so the KERNAL could still
+scan the keyboard and acknowledge VSYNC. Three things went with that model and
+none of them came back:
+
+* **No chaining.** The kernel dispatches by source, so a raster handler sits
+  in the LINE slot and is never called for anything else. Chaining was the
+  answer to one vector shared by every device.
+* **Every `sta VERA_ISR` is gone from the handler path.** The old file had to
+  acknowledge LINE and SPRCOL itself — *"or the moment the handler returns the
+  same interrupt fires again and the machine livelocks"* — because the KERNAL
+  only ever acked VSYNC. The kernel acks all three before calling anybody, and
+  §5.6's stuck-source defence makes that whole class of hang impossible.
+* **The frame counter is the kernel's.** It advances whether or not the module
+  was installed, so `irq_frames` and `vsync_wait` work with no `irq_install`
+  at all — and the subtle re-read at the end of the old handler, which existed
+  because "the KERNAL we chain to acks VSYNC without telling us", went with
+  the thing that caused it.
+
+`irq_save_regs` shrank too: it saved the KERNAL's `r0-r15` at `$02-$21`
+because every KERNAL call went through them. X816 passes arguments in `C`, `X`
+and `Y` and preserves the caller's direct page, so those 32 bytes have no
+owner to protect and are no longer copied.
+
+**One thing got harder and is worth naming**: `irq_line_install` now fills the
+kernel's slot *before* enabling `VERA_IEN`, because a source that asserts with
+no handler installed is disabled by the defence. Arming the hardware first
+would work most of the time and fail whenever the scanline came round in
+between.
+
+`clock.asm` lost every one of its five entries. `RDTIM`/`SETTIM` carried a
+24-bit jiffy count and the kernel's clock is milliseconds, so
+`clock_get_timer`/`clock_set_timer` are **not defined at all** rather than
+redefined — a port that used them gets an assembly error naming the line,
+instead of source that compiles unchanged and runs sixteen times fast. `UDTIM`
+is gone because `$9F90` is hardware and there is nothing to tick. The two RTC
+calls are gone because there is no RTC; wall-clock time would have to come
+from the HPS, and inventing an API here would freeze a shape before the thing
+it describes. What replaces them is `clock_get_ms`/`clock_set_ms` (32-bit,
+49.7 days before it wraps), `clock_mark`/`clock_elapsed`, and `clock_delay` —
+which reads the clock rather than counting instructions, so an SD transfer
+mid-delay does not make it run long.
+
+Green in the emulator with a negative control: `run-libirq.sh`, shipped as
+`LIBIRQ.BIN`. §8 test 8 describes what it covers and why it is a third test
+rather than a repeat of the other two.
+
+**A trap found on the way, left in place and recorded.** `x16_code.s` derives
+`X16_USE_IRQ_ANY` from `X16_USE_IRQ` through a chain of `#ifdef A` →
+`B: .equ 1` → `#ifdef B` steps. The middle of that chain writes an *assembler*
+symbol and the next step tests a *preprocessor* macro, and the C preprocessor
+cannot see a `.equ` — so the chain stops after one link and `system/irq.s` is
+never included. Defining `X16_USE_IRQ` alone produces "undefined symbol:
+`irq_frames`", which is at least loud. `libirq.s` sets every gate explicitly
+and says why. Not fixed in the library because the same pattern gates a dozen
+other module groups and changing it is its own change with its own blast
+radius.
 
 ### 11.4 `storage/bank`, `bankalloc` and `mem` — done, by collapsing them
 
@@ -648,6 +908,23 @@ Two properties were kept deliberately. Addresses in `$00:9F00-$00:9FFF` are
 staging buffer — the one genuinely useful thing about the KERNAL originals.
 And `mem_copy` handles overlap by direction, which is the only reason it is
 more than a byte loop.
+
+**Both now run on `MVN` (2026-08-02), and green on a DE10-Nano** — `LIBMEM.BIN`
+on the card, which is where the bank splitting met real SDRAM rather than the
+emulator's flat array. Measured 7.0 cycles/byte against the
+byte loop's 96.1 for copy and 55.1 for fill — `run-membench.sh`, and
+[AUDIT.md](AUDIT.md) §6.2 records the table and the four bugs the rewrite
+produced. The overlap decision became a choice of *opcode* (`MVN` ascends,
+`MVP` descends) rather than of loop, so the direction logic survived intact.
+The 16-bit half is `kern_block_move`/`kern_block_fill` in
+`system/x816kernel.asm`, because that file owns `rep`/`sep` and a block move
+is inherently 16-bit.
+
+The device-register path stays a byte loop: `MVN` always advances both
+pointers, and not advancing is the whole point of a register. And `MVN`'s `X`
+and `Y` wrap **within their bank**, so every move is split wherever a side
+reaches a boundary — `run-libmem.sh` tests 8 and 9 cover that, including the
+case where source and target cross at different points.
 
 Green in the emulator with a negative control:
 `X816_Calypsi/examples/kernel/run-libmem.sh`, shipped on the card as

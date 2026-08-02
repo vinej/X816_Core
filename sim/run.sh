@@ -11,6 +11,9 @@
 #                     # (simulates ~1M cpu cycles -- takes a few minutes)
 #   ./run.sh blit     # VERA816 blitter unit test (blit816 + vram_if + the
 #                     # real 352 KB main_ram; fill/copy/wrap/contention)
+#   ./run.sh timer    # the $9F90 millisecond counter: rate, the read latch
+#                     # across a carry, and -- the point of it -- that the
+#                     # count keeps running while cpu_rdy is held LOW
 #   ./run.sh lint     # elaborate VERA's top and FAIL on any port/connection
 #                     # width mismatch (see the target for why this exists)
 #   ./run.sh contract # core<->ROM<->emulator constants: generated files
@@ -56,11 +59,19 @@ vlog -quiet -sv ../rtl/bank0_ram.sv ../rtl/boot_rom.sv ../rtl/flat_sdram.sv \
      sdram_sim.v vera_stub.sv tb_boot.v
 vlog -quiet -sv ../vera/fpga/source/main_ram.v ../vera/fpga/source/vram_if.v \
      ../vera/fpga/source/blit816.v tb_blit816.v
+vlog -quiet -sv ../rtl/ms_timer.sv tb_ms_timer.v
 
 run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length
   local out
   out=$(vsim -c -gMODE=$1 -gIMAGE_HEX="$2" -gIMAGE_LEN=$3 -do "run -all; quit -f" tb_boot 2>&1) || true
   echo "$out" | grep -E "\[TB\]|PASS|FAIL|TRAP|Error" || echo "$out" | tail -20
+  echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
+}
+
+run_timer () {
+  local out
+  out=$(vsim -c -do "run -all; quit -f" tb_ms_timer 2>&1) || true
+  echo "$out" | grep -E "\[TB\]|PASS|FAIL|Error" || echo "$out" | tail -20
   echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
 }
 
@@ -167,6 +178,7 @@ case "${1:-all}" in
   fw)       run_boot 2 fwprobe.hex   $FWPROBE_LEN ;;
   noboot)   run_boot 0 bootprobe.hex $PROBE_LEN ;;
   blit)     run_blit ;;
+  timer)    run_timer ;;
   lint)     run_lint ;;
   contract) run_contract ;;
   calypsi)  run_calypsi ;;
@@ -176,7 +188,8 @@ case "${1:-all}" in
           echo "----- boot (staged program) -----";    run_boot 1 bootprobe.hex $PROBE_LEN
           echo "----- fw (kernel firmware) -----";     run_boot 2 fwprobe.hex   $FWPROBE_LEN
           echo "----- blit (VRAM blitter) -----";      run_blit
+          echo "----- timer (ms counter) -----";       run_timer
           echo "----- noboot (bands fallback) -----";  run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  *)      echo "unknown target: $1 (boot | fw | noboot | blit | lint | contract | calypsi | all)"
+  *)      echo "unknown target: $1 (boot | fw | noboot | blit | timer | lint | contract | calypsi | all)"
           exit 1 ;;
 esac

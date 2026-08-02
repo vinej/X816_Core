@@ -166,6 +166,8 @@ silently. Same family: M-2.
 (`cpu_rdy` gates the VIAs' enable, `x816.sv:505,746,781`) — documented design
 choice (`sd_block.sv:30-47`), but VIA-based timekeeping will drift with SD
 activity once anything uses VIA timers.
+*(Superseded 2026-08-02 — see the §6.2 row. The freeze stands; timekeeping no
+longer goes anywhere near it.)*
 
 **L-5.** `goshell` does not check the loaded size: a zero-length
 `/DEMO/SHELL.BIN` makes the exec blob's post-increment loop copy 64 KB of
@@ -635,3 +637,166 @@ plausible number, so the "realistic" column in §9.1 is inferred from the
 measured floor rather than measured. The conclusion holds either way — at the
 floor, 640×480 is still 4.3 fps — but the loose end is real and is named here
 rather than left in a comment.
+
+---
+
+## §6.2 L-4 discharged, 2026-08-02 — the interrupt and clock pass
+
+L-4 said VIA-based timekeeping would drift with SD activity "once anything
+uses VIA timers". `doc/KERNEL.md` §5.6 is that something, and the finding is
+now discharged — not by unfreezing the VIAs, which is load-bearing
+(`sd_block.sv:30-47`), but by building the clock somewhere the freeze cannot
+reach.
+
+**The trap the fix nearly walked into.** The obvious answer is a jiffy counter
+driven from VERA's VSYNC: VERA lives in `pix_clk` and keeps running while the
+CPU is stopped, so it *looks* immune. It is not. VSYNC's interrupt is a single
+LATCH, so a freeze spanning four frames still presents one interrupt to the
+handler and the other three are gone. That failure is silent and proportional
+to card activity — the same shape as the one L-4 named, arrived at by a
+different route, and it would have been very easy to ship.
+
+**What was built instead.** `rtl/ms_timer.sv`, at `$00:9F90-$00:9F93`: a
+32-bit millisecond counter gated by nothing at all — not `cpu_rdy`, not a chip
+select, just `cpu_clk` and reset. `TIME_GET` reads it. The keyboard diagnostic
+counters at `$9F8D-$9F8F` were already the same shape and are the precedent.
+
+Two properties are load-bearing and both are tested on real RTL by
+`sim/run.sh timer`:
+
+* **It counts through a stall.** Measured twice over the same interval, once
+  with `cpu_rdy` held low and once running, and the two must agree. This is
+  the property L-4 is about, and it cannot be observed from software on
+  hardware — the software that would look is itself frozen. The negative
+  control (gate the counter with `cpu_rdy`) was run and turned exactly that
+  check red.
+* **The read is latched.** Reading `$9F90` captures bits 31:8; `$9F91-$9F93`
+  return the capture. Without it a read straddling a carry returns a value
+  that was never true and can go *backwards* — once in 256 reads on hardware,
+  and never in a demo. The testbench places the read so the carry falls
+  between the low byte and the high bytes, which is the only case where a
+  missing latch shows.
+
+**A second clock, deliberately.** `IRQ_FRAMES` counts VSYNC and *does* stop
+during a transfer. That is not a defect: frames are what a raster effect or a
+page flip must not tear against, and milliseconds are what a duration is
+measured in. KERNEL.md §5.6 says which to use for what, and says plainly that
+they disagree during SD activity.
+
+**What else came out of the pass, since an audit file is the right place for
+the uncomfortable parts:**
+
+* **The kernel's §3.1 bank-`$00` budget is effectively spent.** Measured
+  before any of this landed, KernRAM (`$2100-$2FFF`) was **99% full — 38 bytes
+  free**. The interrupt vectors need 92 and cannot live anywhere else, because
+  the 65816's vectors are 16-bit and reach only bank `$00`. It fitted only
+  because the kernel's *direct page*, the other half of the same claim, was
+  7.8% used; `kirq.s` puts its state there under `-DKERNEL_RESIDENT`. Nothing
+  was evicted and the claim did not grow, but the next thing to need bank
+  `$00` will not have that escape. `shell.o` alone holds 1,372 bytes of
+  initialised `data` there, and `font8x8.o`'s keymaps are 256 more that are
+  only in RAM because a `const` array would land in bank `$01` where a near
+  read cannot reach it. Neither is a bug today; both are where to look first.
+* **An unhandled level IRQ was a silent hard hang, and now is not.** Any of
+  the seven sources asserting with nothing to service it would have returned
+  from `rti` into an instruction that was immediately interrupted again,
+  forever, with no diagnostic. KERNEL.md §5.6 documents the defence; it
+  records what it disabled so a test can prove it fired rather than inferring
+  it from a machine that merely did not hang.
+* **A gate chain in the converted library does not work.** `x16_code.s`
+  derives `X16_USE_IRQ_ANY` from `X16_USE_IRQ` through `#ifdef A` →
+  `B: .equ 1` → `#ifdef B`, and the C preprocessor cannot see a `.equ`, so the
+  chain stops after one link and `system/irq.s` is never included. It fails
+  loudly (`undefined symbol: irq_frames`) rather than quietly, and the same
+  pattern gates a dozen other module groups, so it is recorded in KERNEL.md
+  §11.5 and left alone rather than fixed as a side effect of this pass.
+* **A benchmark that lied, and how it was caught.** `run-membench.sh`'s first
+  run reported `LIBFILL` at 373 ms. The benchmark had parked its
+  routine-under-test pointer in `X16_T0`, and `mem_fill`'s first instruction
+  is `sta X16_T0` — the library's T registers are its own scratch, so three of
+  the four timed iterations jumped through the fill value. The real figure is
+  902 ms. Nothing about the wrong number looked wrong; it was plausible, it
+  was stable across runs, and it was 2.4× too fast. The rule this pays for:
+  **anything a library routine can see is the wrong place to keep state
+  across a call to it.**
+
+### The benchmark, and what was done about it
+
+`run-membench.sh`, 4 x 32 KB, instruction cost only (the emulator's memory is
+uniform, so SDRAM waits are not in these figures):
+
+| | cycles/byte before | after |
+|---|---:|---:|
+| `mem_copy` | 96.1 | **7.0** |
+| `mem_fill` | 55.1 | **7.0** |
+| (16-bit word loop, for reference) | 12.0 / 8.5 | — |
+
+The conclusion was *not* "convert x16lib to 16-bit". A 16-bit rewrite buys 8x;
+`MVN` buys 13.7x and is **simpler** than the word loop. The old `mem_copy` cost
+what it did because it made three `jsr` calls per byte moved.
+
+**Done, 2026-08-02, and GREEN ON A DE10-NANO** (`LIBMEM.BIN`, with the
+bitstream of that date). Hardware was not a formality here: the emulator's
+memory is uniform, so the bank-splitting logic ran against a flat array there
+and against real SDRAM across real bank boundaries on the board. `mem_copy`
+and `mem_fill` run on `MVN` — or `MVP` when
+the ranges overlap upwards, so the existing `.overlaps_up` test became a choice
+of *opcode* rather than of loop. The 16-bit half is `kern_block_move` /
+`kern_block_fill` in `system/x816kernel.asm`, which is where it has to be: that
+file owns `rep`/`sep`, and a block move is inherently 16-bit.
+
+`MVN` lands on exactly 7.0 cycles/byte — the 65816's published figure — and the
+library now measures identical to a raw reference implementation of the same
+instruction. `run-membench.sh` is therefore no longer a decision aid but a
+**regression guard**: if a library row drifts back toward the word-loop row,
+something has put a loop back in the path.
+
+**The device-register path is still a byte loop and always will be.** An
+address in `$9F00-$9FFF` deliberately does not advance so a copy can stream
+through VERA's data port with no staging buffer; `MVN` always advances both
+pointers. That carve-out is the one genuinely useful thing x16lib inherited
+from the KERNAL originals, and it is the only remaining path where the byte
+count costs more than the setup.
+
+### Four bugs the rewrite produced, and what each one teaches
+
+Recorded because every one of them was silent, and three were found by a test
+rather than by reading.
+
+* **The DBR restore read through the wrong DBR.** `MVN` leaves DBR holding the
+  destination bank. The instruction restoring it was `lda` from a constant in
+  memory — an *absolute* read, which therefore went through the bank `MVN` had
+  just set, pushed whatever sat at that offset in some caller's data, and left
+  DBR pointing at it. The machine then wandered with no diagnostic. The fix is
+  an 8-bit immediate, which touches no memory. **A routine that has just
+  changed DBR cannot use memory to change it back.**
+* **A cap of zero meant "no limit" in one place and "zero" in another.** The
+  bank-splitter computes the room left in a bank as `0 - offset`, which comes
+  out zero exactly when the offset is zero and the room is a full 65536. The
+  shared helper knew that; an inline copy of the same arithmetic in the fill
+  path did not, capped the piece at zero, and looped forever without advancing.
+  **The second implementation of a rule is where the rule gets lost.**
+* **`pea $0000` is ACME's spelling, not Calypsi's** (`pea #`). Caught by the
+  assembler, and worth noting only because the *fix* for it introduced the DBR
+  bug above.
+* **A bank-boundary test that did not reach a boundary.** The first draft of
+  the new test 9 copied `$200` bytes to `$32:FE00` — which ends exactly at
+  `$32:FFFF`, so the target never crossed anything, and the check past the
+  boundary was reading memory the copy had no reason to touch. The test failed
+  and the code was right. **A boundary test has to be arithmetic-checked, not
+  eyeballed.**
+
+**What is still only an emulator number:** the 7.0 cycles/byte. `membench.bin`
+is not shipped on the card, so the figure is instruction cost with no SDRAM
+wait states. The board proves the block move is *correct*; how much of the
+13.7x survives real memory timing is unmeasured, and shipping `MEMBENCH.BIN`
+the way `IRQTEST.BIN` is shipped would settle it.
+
+Tests 8 and 9 in `run-libmem.sh` are new and cover exactly what `MVN` brought
+with it: `X` and `Y` are sixteen bits and the bank comes from the instruction,
+so a move running off the end of a bank does not carry into the next one — it
+**wraps to the start of the same bank** and quietly overwrites what is there.
+Nothing that existed before would have noticed: `mem_alloc` hands out 4 KB
+blocks that sit comfortably inside one bank, so every earlier test could pass
+with the splitting logic missing entirely. Test 9 makes the source and target
+cross at *different* points, which a splitter watching only one side fails.
