@@ -106,32 +106,45 @@ Switched by the mode bit:
 * the firmware region `$F0-$FF` — always SDRAM, always write-protected
 * the I/O page, the SD block device, the boot overlay
 
-**The mode is chosen at boot and requires a reset**, because switching
-invalidates whatever the block held. It is not a live toggle and should not
-pretend to be.
+**CHANGING MODE REQUIRES A FULL COLD BOOT** — not a CPU reset. Nothing about
+the machine's state carries across: memory contents are undefined, VERA, the
+SD block device and the SMC all re-initialise from scratch.
 
-### 4.1 How a program asks for VIDEO mode — open question
+That is a deliberate constraint and it buys more than it costs. A warm reset
+would leave the question of what is still live when the memory map changes
+underneath it — an SD DMA mid-transfer would write into whichever memory now
+answers, which is a card-corrupting bug with no diagnostic. A cold boot has
+none of that: there is nothing in flight because there is nothing at all.
 
-With FAST as the default, a 640×480 program cannot simply be `run` from the
-prompt: the memory it needs does not exist until the mode changes and the
-machine resets. Three ways, in order of how much they ask of the user:
+### 4.1 How the mode is chosen — the OSD, and only the OSD
 
-1. **A flag in the image header.** `X816_MAGIC` is followed by an entry `jmp`
-   at +4; if a spare byte in that header declared "needs VIDEO", `cmd_run`
-   could set the mode, park the path somewhere that survives a CPU reset, and
-   reset. The kernel would come up in VIDEO and launch it. **Recommended** —
-   the user types `run SCANOUT.BIN` and it works, which is the only outcome
-   that does not turn into a support question.
-2. **A shell command** — `video` / `fast`, then reset, then `run`. Trivial to
-   build, and a fine first step while option 1 is designed.
-3. **The OSD.** Always available as a manual override, and probably wanted
-   regardless.
+The cold-boot rule settles this, by removing the alternatives. Nothing the
+guest writes can survive to be read after a cold boot, so the mode cannot be a
+SYSCTL bit the software sets, and it cannot be a flag in an image header that
+`run` acts on by parking a request and resetting. There is nowhere to park it.
 
-Option 1 needs one thing this machine has not needed before: **state that
-survives a CPU reset.** A CPU reset does not clear SDRAM or bank `$00` BRAM,
-so a magic-guarded cell works — but it must be magic-guarded, because a cold
-power-on leaves that memory as noise and a stale "launch this" would be
-obeyed.
+What does persist across a cold boot is **MiSTer's own core configuration**,
+stored on the SD card and applied by the HPS when the core starts. So:
+
+* the mode is an **OSD option** in `CONF_STR` — a `status` bit off `HPS_BUS`,
+  the same mechanism every other MiSTer core option uses, and marked so that
+  changing it resets the core
+* the guest gets a **read-only** bit in the SYSCTL page so software can *see*
+  which mode it is in
+* the kernel **prints the mode at boot**, so it is never a mystery
+* a program that needs VIDEO **checks the bit and refuses with a clear
+  message** — "this needs VIDEO mode; set it in the OSD" — rather than
+  running against 128 KB of VRAM and drawing garbage
+
+`run SCANOUT.BIN` in FAST mode therefore prints an instruction instead of
+working, and that is the honest outcome. A machine that silently half-worked
+would be worse, and the alternative that made it automatic is not available at
+any price once the switch is a cold boot.
+
+This also **removes a whole class of RTL risk**: with no runtime switching,
+there is no mid-access hazard to design against and no need to prove the mux
+is safe while the CPU is mid-cycle. The mode bit is constant for the life of a
+boot.
 
 ---
 
@@ -165,10 +178,11 @@ under.
    RTL, boot ROM, emulator, linker maps — takes them from there, and
    `--selftest` proves the checks can fail.
 2. **`rtl/switch_ram.sv` + a testbench, no Quartus round.** Prove both modes
-   address the right memory, that the mode bit does nothing while the CPU is
-   mid-access, and that VERA cannot see the block in FAST mode. `sim/run.sh
+   address the right memory and that VERA cannot see the block in FAST mode.
+   The mode is constant for a whole boot (§4.1), so there is no mid-access
+   switching to test — the testbench elaborates each mode separately. `sim/run.sh
    switch`, with a negative control that mis-wires one mode and must be
-   caught — the same discipline `tb_ms_timer` follows.
+   caught, the same discipline `tb_ms_timer` follows.
 3. **The emulator, including the SDRAM cost model.** Two parts, and the second
    matters more than it looks: the emulator currently models a uniform
    single-cycle machine, which `BANKBNCH` showed is an *exact* model of BRAM
@@ -176,8 +190,10 @@ under.
    emulator timings become predictive instead of blind — without it, every
    future optimisation has the same hole that hid the MVN stub result.
 4. **RTL integration** — the six muxes in `x816.sv`. One Quartus round.
-5. **Boot and kernel** — default to FAST; the shell command from §4.1 option
-   2; then the header flag and the reset-surviving launch cell from option 1.
+5. **OSD, boot and kernel** — the `CONF_STR` option and its reset flag; the
+   read-only SYSCTL bit; the kernel printing the mode at boot; and the
+   VERA816 tests checking the bit and refusing with a message instead of
+   drawing garbage.
 6. **Linker maps and docs** — a FAST-mode map, `MEMORY_MAP.md`, and a
    conformance test that proves a program really executed from BRAM. `BANKBNCH`
    already has the mechanism: it reports the bank it ran in, and the same trick
@@ -210,10 +226,12 @@ up in permanently.
   `run-*.sh` verdict should name the mode.
 * **A program that assumes SDRAM timing.** Nothing in the tree does today, but
   anything hand-tuned against SDRAM stalls would change behaviour.
-* **The default flip is user-visible.** Someone flashing the core gets stock
-  128 KB VERA, and the high-resolution demos need a mode change. The kernel
-  should say which mode it booted in, and the card's help text must explain
-  it, or this reads as a regression rather than a choice.
+* **The default flip is user-visible, and the switch is manual.** Someone
+  flashing the core gets stock 128 KB VERA, and the high-resolution demos need
+  an OSD change and a cold boot — there is no way to make `run` do it for them
+  (§4.1). The kernel printing the mode, the demos refusing with a clear
+  message, and the card's help text are the whole mitigation, so all three
+  have to be right or this reads as a regression rather than a choice.
 * **The 32 KB idle in VIDEO mode** is real waste. It buys a clean four-bank
   decode; if blocks turn out to be the binding constraint, this is the first
   thing to reconsider.
