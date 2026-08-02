@@ -858,6 +858,11 @@ MVN stub's 2.5x was invisible until `MEMBENCH.BIN` met the board. The emulator
 is not wrong; it models one of the machine's two memories and has never been
 told about the other.
 
+**What is planned as a result:** `doc/BRAM_SWITCH.md` — one 256 KB block of
+BRAM, always instantiated, owned either by VERA (352 KB VRAM, exactly as
+today) or by the CPU (banks `$01-$04`, so every existing program gets 4.5x by
+being loaded rather than rewritten). It fits at +26 M10K blocks, 96% used.
+
 **What it changes.** `doc/VERA_MEMORY_REVIEW.md` §1.3 concluded the gaming
 bottleneck is fill rate — one `sta` per pixel, a CPU-throughput limit. A 4.5x
 CPU is a 4.5x fill rate, which is a change of kind rather than degree. It also
