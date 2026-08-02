@@ -66,6 +66,26 @@ fi
 #
 # Done BEFORE `rm -rf`, so a failure leaves the previous good release intact --
 # refusing after the wipe turns a caught mistake into a worse one.
+#
+# ---- the contract, first of all --------------------------------------------
+# The bitstream, the ROMs and the emulator agree about the load base, the
+# firmware region, the kernel table and the I/O map by SHARING one table
+# (tools/contract.py), and the sites that cannot share it -- x816.sv's
+# localparams, the ln65816 linker scripts, the card layout -- are checked
+# against it. A release is exactly the artifact where a disagreement stops
+# being theoretical: the .rbf and the .rom in the same directory would each be
+# internally consistent and jump to different addresses.
+#
+# It costs a fraction of a second and it runs before anything is built.
+if ! python "$CORE/tools/contract.py" --check >/dev/null 2>&1; then
+    echo "REFUSING: the core<->ROM<->emulator contract has drifted." >&2
+    python "$CORE/tools/contract.py" --check 2>&1 | grep -E "FAIL|STALE|MISSING" >&2
+    echo "  run: python tools/contract.py --check    for the whole picture" >&2
+    echo "  the existing release under releases/mister/ is untouched." >&2
+    exit 1
+fi
+echo "contract: single-sourced, every site agrees"
+
 SHELL_BIN="$CALYPSI/examples/shell/shell.bin"
 KERNEL_BIN="$CALYPSI/examples/shell/kernel.bin"
 if [ -n "$CALYPSI" ] && [ -x "$CALYPSI/Calypsi/calypsi-65816-5.18/bin/cc65816" ]; then

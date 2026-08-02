@@ -77,9 +77,12 @@ Unpack it into the repository that uses it:
 X816_Calypsi/Calypsi/calypsi-65816-5.18/
 ```
 
-Every `Makefile` and `run-*.sh` under `X816_Calypsi/examples/` defaults to that
-relative path, so a clean checkout plus an unpacked toolchain builds with no
-configuration. Setting `CALYPSI` in the environment still overrides it.
+Every `Makefile` and `run-*.sh` under `X816_Calypsi/examples/` reaches that path
+through `runtime/calypsi.sh` (or `runtime/calypsi.mk`), which derives it from
+its own location — so a clean checkout plus an unpacked toolchain builds with
+no configuration, and a script no longer has to be run from its own directory
+for `../../` to resolve. Setting `CALYPSI` in the environment still overrides
+it. See §5.
 
 `Calypsi/` is in `.gitignore` and **must stay there** — the toolchain is closed
 source and redistribution is not permitted (§1). Keeping it inside the repo is
@@ -249,6 +252,59 @@ Loading onto the machine: the ELF must be converted to a flat image whose byte
 offset is its X816 address, then supplied as `boot1.rom` in the core's folder or
 through the OSD *Load Image* slot. See [MEMORY_MAP.md](MEMORY_MAP.md) §1.
 
+### 5.1 Nothing writes that command line out by hand
+
+`X816_Calypsi/runtime/calypsi.sh` is the one recipe. Source it and use
+`cc816` / `as816` / `ln816`:
+
+```sh
+. "$(dirname "$0")/../../runtime/calypsi.sh"
+cc816 $RT/console.c "$OUT/console.o"    # -O0, large/small, -I runtime
+as816 $RT/x816hdr.s "$OUT/hdr.o"
+ln816 "$OUT/CONTEST" "$OUT/hdr.o" "$OUT/console.o"   # -> CONTEST.elf + .raw
+```
+
+`runtime/calypsi.mk` is the same recipe for `make` (`include
+../../runtime/calypsi.mk`, then `$(call X816_LINK,STEM)`).
+
+**`-O0` is the default and `cc816` refuses to compile without it.** Calypsi
+5.18 eliminates volatile **reads** above `-O0`, so anything that reads a
+hardware register back miscompiles silently — a clean-linking broken binary,
+which is how a FAT32 reader ended up walking a cluster number it never
+fetched. Code that provably only *writes* registers may opt out, and has to
+say why:
+
+```sh
+calypsi_optimise -O2 "writes VERA registers, never reads one back"
+```
+
+That line, and the `CALYPSI_ALLOW_OPT := 1` that means the same thing in
+`calypsi.mk`, are the only two places `-O0` is absent in the tree. This
+replaces the copy-pasted compile line that `doc/AUDIT.md` M-4 counted across
+seventeen files; the durable fix (assembly SD accessors, then `-O2`
+everywhere) is still separate and still planned.
+
+### 5.2 Constants shared with the core and the emulator
+
+Nothing hand-writes the load base, the firmware region, the kernel table
+address, the call numbers or the I/O map either. `X816_core/tools/contract.py`
+holds one table and generates:
+
+| Generated | Included by |
+|---|---|
+| `runtime/x816_contract.h` | `kernel.h`, `shell.c`, `goshell.c`, `kexec.c` |
+| `runtime/x816_contract.inc` | `kerntab.s`, `kcall.s`, `exec.s` |
+| `runtime/x816_kerntab.inc` | `kerntab.s` — the 64-entry table body |
+| `X816_core/boot/x816_contract.inc` | `boot/boot.s` (ca65) |
+| `X816_Emulator/src/x816_contract.h` | `memory.h` |
+
+The sites that cannot include a header — `x816.sv`'s localparams, the
+`ln65816` linker scripts, `tools/mksdcard.py` — keep their own literal and are
+**verified** against the table instead. `python tools/contract.py --check`
+fails on any drift, `--selftest` proves each check can fail, and both run from
+`sim/run.sh contract` and again inside `tools/mkrelease.sh` before a release
+is packaged.
+
 ---
 
 ## 6. Open item — the boot ROM still uses ca65
@@ -261,6 +317,12 @@ Worth converting to `as65816` once Calypsi is installed, so the project has a
 single toolchain dependency instead of two. The syntax differs — Calypsi uses
 `##` for 16-bit immediates, `.section`, `.rtmodel` — so this is a rewrite of the
 stub, not a flag change. Not urgent.
+
+It does share the contract now (§5.2): `boot.s` `.include`s a generated ca65
+file rather than repeating `PROG_BASE`, `FW_BASE` and `SYSCTL`. Wiring it up
+produced a **byte-identical** `boot.hex` and `boot.rom`, which was checked
+before it was committed — so the shipped bitstream is still the right one and
+the change cost no Quartus round.
 
 ---
 

@@ -29,6 +29,13 @@
 ; RAM holding identical bytes.
 ; ============================================================================
 
+; The contract this stub is the far end of: where an image lives, what marks
+; it as one, and where SYSCTL is. Generated from X816_core/tools/contract.py,
+; which is also what x816.sv's PROG_BASE/FW_BASE are checked against --
+; `python tools/contract.py --check`. Every value below used to be a literal
+; here AND a localparam there AND a .equ in the runtime, agreeing by memory.
+.include "x816_contract.inc"
+
 ; ---- I/O map (bank $00, page $9F -- deliberately the same layout as the
 ;      Commander X16 so its VERA/VIA/YM register offsets port over unchanged)
 VERA_ADDR_L   = $9F20
@@ -42,17 +49,16 @@ VERA_DC_VSCALE= $9F2B
 VERA_L0_CONFIG= $9F2D
 VERA_L0_TILEB = $9F2F
 
-; X816 system control (new; not an X16 register)
-SYSCTL        = $9F80          ; bit 0: boot ROM overlay enable (1 at reset)
-
-; Where a loaded program lives. Bank $01 is the first SDRAM bank -- bank $00
-; is BRAM and holds the direct page, the stack and this stub, so a load must
-; not land there. The RTL's HPS loader adds this base to the file offset, so
-; a program links at PROG_BASE+4 and loads from offset 0.
-PROG_BASE     = $010000
-; The kernel firmware region (doc/KERNEL.md §3): HPS-loaded as boot2.rom,
-; write-protected by the core. Checked before PROG_BASE.
-FW_BASE       = $F00000
+; X816 system control (new; not an X16 register) is X816_SYSCTL, bit 0 =
+; X816_SYSCTL_OVERLAY (boot ROM overlay enable, 1 at reset).
+;
+; Where a loaded program lives is X816_PROG_BASE. Bank $01 is the first SDRAM
+; bank -- bank $00 is BRAM and holds the direct page, the stack and this stub,
+; so a load must not land there. The RTL's HPS loader adds this base to the
+; file offset, so a program links at X816_PROG_ENTRY and loads from offset 0.
+;
+; X816_FW_BASE is the kernel firmware region (doc/KERNEL.md §3): HPS-loaded
+; as boot2.rom, write-protected by the core. Checked before X816_PROG_BASE.
 ; Magic at either base is the four bytes "X816"; the entry point is base+4.
 
 .segment "BOOT"
@@ -82,7 +88,7 @@ reset:
 
         sep     #$20
 .a8
-        stz     SYSCTL          ; overlay off -- bank 0 is now uniform RAM
+        stz     X816_SYSCTL          ; overlay off -- bank 0 is now uniform RAM
 
 ; ---- hand over: kernel firmware first, then a loaded program ---------------
 ; Both bases are SDRAM: an absent image reads as power-up noise, and the
@@ -96,22 +102,22 @@ reset:
 ; path. The loops compare against this ROM's own copy of the string, so the
 ; bytes checked and the bytes shipped cannot drift.
         ldx     #0
-@fwchk: lda     f:FW_BASE,x
+@fwchk: lda     f:X816_FW_BASE,x
         cmp     magic,x
         bne     @no_fw
         inx
         cpx     #4
         bne     @fwchk
-        jml     FW_BASE+4       ; kernel owns the machine
+        jml     X816_FW_ENTRY       ; kernel owns the machine
 
 @no_fw: ldx     #0
-@pgchk: lda     f:PROG_BASE,x
+@pgchk: lda     f:X816_PROG_BASE,x
         cmp     magic,x
         bne     no_prog
         inx
         cpx     #4
         bne     @pgchk
-        jml     PROG_BASE+4     ; long jump: sets PBR, program owns the machine
+        jml     X816_PROG_ENTRY     ; long jump: sets PBR, program owns the machine
 
 magic:  .byte   "X816"
 

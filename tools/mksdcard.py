@@ -130,6 +130,18 @@ DEMOS = [
     # own directory, and kfstest leaves /KEEP.TXT behind on purpose.
     ("KFSTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "kfstest.bin")),
     ("LIBFS.BIN",   os.path.join(CALYPSI, "examples", "shell", "libfs.bin")),
+    # MEM_ALLOC/MEM_FREE, doc/KERNEL.md section 8 test 7. Seven checks, and
+    # every one writes through the address the kernel handed back -- an
+    # allocator that returns plausible addresses backed by nothing passes
+    # every arithmetic test there is. Green = pass; run-mem.sh names the
+    # colours. On the card it meets the RESIDENT kernel, which is the one
+    # thing the emulator run cannot cover: there it links a private copy.
+    ("MEMTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "memtest.bin")),
+    # The same ground through the reshaped x16lib memory API -- mem_alloc,
+    # mem_fill, mem_copy (including an overlapping range), mem_crc against a
+    # published check value. On the card it runs against the RESIDENT kernel;
+    # run-libmem.sh links a private copy.
+    ("LIBMEM.BIN",  os.path.join(CALYPSI, "examples", "shell", "libmem.bin")),
     # Asks for every key the 64-entry keymap cannot express -- F-keys, the
     # arrows, the keypad, the right-hand modifiers -- and writes what the SMC
     # actually sent to /KEYMAP.TXT. Those codes are DISCARDED before any
@@ -164,6 +176,21 @@ DEMOS = [
     # That difference is the whole point of section 4.4, and it is the way a
     # real program should drive this mode.
     ("SCANFULL.BIN", os.path.join(CALYPSI, "examples", "vera", "scanfull.bin")),
+    # The same picture at 640x480 4bpp, based at $20000. VERA816.md 5.0's
+    # OTHER mode stock VERA could not scan out -- it wraps after line 409,
+    # not 204, and takes a different arm of the line-address shift. It is
+    # also the only image in this tree that writes L0_BASEX non-zero, so it
+    # is the only one that proves the widened tile base does anything.
+    # Needs no blitter and no REGWIN: 153,600 bytes at $20000 clear the
+    # register windows outright, so it paints with no gap at all. Same eight
+    # bands, judged the same way by eye.
+    ("SCAN4.BIN",   os.path.join(CALYPSI, "examples", "vera", "scan4.bin")),
+    # VERA816.md section 8 test 9: FX affine. Six correctness checks against a
+    # C reference, then it PRINTS the measured cycles per pixel -- which is
+    # the number section 9.1's "no FX_BASEX" decision rests on, and which is
+    # worth taking on real hardware where the CPU timing is the real one
+    # rather than the emulator's model of it.
+    ("FXTEST.BIN",  os.path.join(CALYPSI, "examples", "vera", "fxtest.bin")),
     ("SHELL.BIN",  os.path.join(CALYPSI, "examples", "shell", "shell.bin")),
     ("SHTEST.BIN", os.path.join(CALYPSI, "examples", "shell", "shtest.bin")),
     ("KBDECHO.BIN", os.path.join(CALYPSI, "examples", "shell", "kbdecho.bin")),

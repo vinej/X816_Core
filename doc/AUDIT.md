@@ -319,7 +319,7 @@ trip. Upstream's answer is its ModelSim suite — see
    (generator producing `.h`/`.s`/emulator tables); assembly SD accessors so
    FAT32 can leave `-O0` (M-4); `fat_alloc` bound from the data region and an
    error-vs-EOF distinction in `fat32_read`/`kfs_read` (M-5); size check in
-   goshell (L-5).
+   goshell (L-5). *(All done except the SD accessors — see §6 and §6.1.)*
 
 Items requiring a Quartus compile (M-1 RTL fix, M-2, H-1's loader half,
 L-1/L-2 hardening if desired) should be batched and each proven in simulation
@@ -346,6 +346,10 @@ Later the same day that residual was closed by writing the test that had never
 existed — and writing it produced **H-4**, a second RTL-only divergence in the
 same neighbourhood. One further hardware round confirmed both. Every finding
 in this document is now closed, and no residual is named.
+
+A third pass the same day took the two hygiene rows this section had left
+**open by choice** — the contract-constant generator and the shared build
+recipe — and closed those too; see §6.1. Nothing in §6 is open now.
 
 ### H-3 (found on hardware 2026-08-01, after the audit): the VERA816 widening
 ### never reached the display side
@@ -426,7 +430,7 @@ ran on hardware. Both were sitting in code the audit read.
 | M-1 sprite reach | **FIXED both sides.** RTL: `sprite_renderer.v` attr bits [13:12] (VERA816.md §5.1). Emulator: same decode, plus an out-of-bounds sprite-fetch latent bug fixed on the way (`video.c` now fetches via `video_space_read`). Conformance green: `examples/vera/run-blit.sh` test 8 renders one sprite from `$34000` via the new bits and one below 128 KB, probing both. **Green on a DE10-Nano** with the second bitstream of 2026-08-01 — but only after H-3, which is what the first on-board run exposed. |
 | M-2 sd_block reset CDC | **FIXED** (`fsm_rst_sync`, same pattern as flat_sdram). |
 | M-3 MEMORY_MAP.md SD table | **FIXED** (transcribed from RTL, incl. the CMD/STATUS split rationale). |
-| M-4 `-O0` by copy-paste | **PARTIALLY resolved, rest dispositioned**: the volatile-elision contract is now stated in fat32.h/x816_sd.h and each build script; full `-O2` migration stays deferred behind the assembly-SD-accessor plan — under the pinned Calypsi 5.18 the risk is drift, and the recipes now all carry the warning. Consolidating ~10 recipes into one include remains open (tracked below). |
+| M-4 `-O0` by copy-paste | **RESOLVED as far as it can be without the accessor rewrite.** The recipe is one file (`runtime/calypsi.sh`, and `calypsi.mk` for make), sourced by `build.sh`, all thirteen `run-*.sh` and all six Makefiles; `cc816` **refuses to compile without `-O0`** unless the caller opts out with a written reason (`calypsi_optimise -O2 "..."`), so forgetting is an error message rather than a clean-linking broken binary. Two callers opt out and both say why in a comment (c-lib and the blank template write VERA registers and never read one back). Full `-O2` migration stays deferred behind the assembly-SD-accessor plan. |
 | M-5a fat_alloc bound | **FIXED**, proven differentially on host (unfixed code wrote 5.5 MB past a crafted volume; fixed code exact). |
 | M-5b error vs EOF | **FIXED** (`fat32_ioerr()`/`fat32_clearerr()`, `kfs_read` returns `KERR_IO`, shell `type`/`copy` report truncation). |
 | L-1 loader wrap | **FIXED** (25-bit sum, carry drops bytes). |
@@ -438,7 +442,7 @@ ran on hardware. Both were sitting in code the audit read.
 | L-7 small items | **FIXED**: `$55AA` check, dump lowercase, dead key check removed. `kfs_read/write` >64 KB C-return truncation stays documented ABI. |
 | L-8 bank0_ram declare-before-use | **FIXED** (first pass). |
 | Doc drift table (7 rows) | **ALL FIXED** (MEMORY_MAP SD section, PORTING VERA/SMC rows, KERNEL/SHELL headers, mksdcard comment, Calypsi README, shell size comments). |
-| Contract duplication | **OPEN by choice**: a generator single-sourcing the constants across the three repos is real tooling work and was deliberately not bundled with this behaviour-heavy pass. `kexec.c`/`goshell.c` note their duplicated constants. Recommended next hygiene task, together with the build-recipe include. |
+| Contract duplication | **FIXED.** `tools/contract.py` holds one table and generates `runtime/x816_contract.h`, `runtime/x816_contract.inc`, `runtime/x816_kerntab.inc`, `boot/x816_contract.inc` and `X816_Emulator/src/x816_contract.h`; `kernel.h`, `shell.c`, `goshell.c`, `kexec.c`, `kerntab.s`, `kcall.s`, `exec.s`, `boot/boot.s` and the emulator's `memory.h` include them and define none of it themselves. The positional half went with it: `kern_proto`'s 64 entries and the `K_*` numbers are now generated from the same rows, so a slot's position and its number cannot disagree. Sites that cannot include a header — `x816.sv`, the three `.scm` maps, `mksdcard.py`, the `.byte "X816"` in `boot.s` and `x816hdr.s` — are **verified** against the table, and a pattern that stops matching is a failure, not a pass. `--selftest` is the negative control: all 41 checks go red when fed a wrong value. Runs from `sim/run.sh contract` and again in `mkrelease.sh` before packaging. **Every artifact came out byte-identical** — `boot.rom`, `boot.hex` and all sixteen Calypsi images — so the shipped bitstream stayed valid and no Quartus round was needed. |
 | H-4 register-window write aliasing | **FIXED** (`top.v` `ib_addr_lo128k` on `palette_write` / `sprite_attr_write` / `audio_write`), RTL-only — the emulator was already correct. Found by writing test 5, not by running it. **Green on a DE10-Nano**: `scanout.c` preflight 4 probes `$3FA02`/`$3FC00` and paints grey if the alias is there, so the picture coming up at all is the proof. |
 | Coverage gaps (§4 ❌ rows) | `run`/exec/goshell: **covered** for the firmware path (`run-fwboot.sh`, `sim fw`); ESC-cycle end-to-end still needs an `-autokeys` raw-keynum extension. VERA816 §8 test 5: **covered and GREEN ON HARDWARE** (`examples/vera/run-scanout.sh` + `SCANOUT.BIN` on the card, emulator-green with a negative control) — this was the last ❌ that mattered. sd_block RTL + SMC chain: Phase 2/3 of SIMULATION.md, unchanged. |
 
@@ -447,3 +451,187 @@ DCSEL-33, VERA816.md §4.3, `sim/run.sh blit` green) per
 [VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md), the shell `go` command (OSD
 image hand-over under a resident kernel), `boot/hostfat.sh` (captures the
 host-harness recipe whose absence had let it rot), and `run-fwboot.sh`.
+
+### §6.1 The two hygiene items, closed (2026-08-01, third pass)
+
+The two rows §6 left open by choice — the contract-constant generator and the
+shared build-recipe include — are the ones above, and they are done. Both are
+pure tooling: no RTL changed, no hardware round, and the proof that they are
+behaviour-neutral is that **every built artifact is byte-identical to what it
+replaced**. `boot.rom`/`boot.hex` were compared byte for byte after `boot.s`
+took the generated ca65 include; the sixteen Calypsi images show no diff
+against `HEAD`.
+
+What the regression run covered afterwards: all thirteen emulator conformance
+runs green (`asm-lib`, `c-lib`, `console`, `fat32` read + write, `shell` emu /
+kbd / fs / fwboot, `kernel` kfs + libfs, `vera` blit / regwin / scanout), three
+of their negative controls still failing as designed, `sim/run.sh all`
+(contract, lint, boot, fw, blit, noboot) and `sim816/run.sh` — and the emulator
+was **rebuilt** first, because `memory.h` now includes the generated header, so
+the last five of those ran against the new binary rather than a stale one.
+
+Two things this pass deliberately did not do:
+
+* **`rtl/*.sv` still hand-writes its constants.** Including a generated
+  `.svh` in `x816.sv` would produce an identical netlist but still needs a
+  Quartus compile to ship, and this was scoped as no-hardware work. `--check`
+  verifies the localparams instead, which closes the drift risk without the
+  round trip; wiring the RTL itself belongs with the next compile that
+  happens for another reason.
+* **The six Makefiles were converted but not run.** `make` still cannot spawn
+  the toolchain on this machine, so they were checked with `make -n` and their
+  expansions read. `build.sh` remains the build that ships and the one
+  `mkrelease.sh` calls, and `examples/shell/Makefile` now says so at the top —
+  its object list had been stale (missing `kfs.o`/`kerntab.o`, `exec.o` twice)
+  and now matches `build.sh`'s `COMMON` line for line.
+
+One thing worth noticing that fell out of writing the table, not a finding
+from it: `x816-lib.scm` and `x816-plain.scm` place `FarRAM` at
+`#x100000-#x1fffff`, which is exactly `X816_EXEC_STAGE`. Nothing collides
+today — the small data model places no `far` section — but a program that ever
+grew one would have it staged over by its own `run`. Recorded here rather than
+fixed: it is a linker-map decision, not a hygiene one.
+
+### §6.2 Two findings from implementing MEM_ALLOC (2026-08-01, fourth pass)
+
+Neither was being looked for; both are the same shape as what §6 already
+collects, so they belong here rather than in a commit message.
+
+**A-1. `kern_call` dropped `X`, and one assertion had been vacuous because of
+it.** `runtime/kcall.s` wrote the result and the carry back into `kern_c` and
+`kern_carry` but never stored `X`, so the two entries that return sixteen more
+bits there — `FS_SIZE`'s high half, and now `MEM_ALLOC`'s bank — were
+unreachable from C. `kfstest.c:257` had been checking `kern_x != 0` after
+`FS_SIZE` with the comment *"a kernel that left junk in X would be missed by
+checking only the low half"*; since `call1()` sets `kern_x = 0` before every
+call and nothing wrote it back, that check was reading its own zero and could
+not fail. **FIXED** (two instructions in `kern_call_back`, placed after the
+`rol` that consumes carry so the flag survives). Proven by the control that
+should have existed: replacing `kfs_size`'s high-half store with `0xBEEF` now
+turns `run-kfs.sh` red at test 3, and before the fix the same mutation was
+invisible.
+
+**A-2. Calypsi 5.18 compiles `(unsigned char)(expr)` against a byte from
+memory as a sign-extended 16-bit comparison.** The `MEM_ALLOC` conformance
+test writes a signature byte through the address the kernel returned and reads
+it back; the read-back did not match. The allocator was correct — the *test*
+was miscompiled.
+
+Off the generated listing: the loaded byte is zero-extended (`and ##255`)
+while the cast expression gets the **signed**-char promotion idiom
+(`eor ##128 / and ##255 / sec / sbc ##128`), and the two are then compared
+16-bit. `$00EE` versus `$FFEE`. So a value with **bit 7 set compares unequal
+to itself**, and one below `$80` does not — in the run that found it,
+`sig ^ 0x5A` = `$4B` passed and `sig ^ 0xFF` = `$EE` failed two lines later,
+which reads as flaky hardware rather than as a compiler bug.
+
+Characterised rather than guessed at, by compiling a matrix and grepping the
+listings for the idiom. It fires for **every storage class** — parameter,
+local, static, array element, struct member, return value. It does *not* fire
+for a cast with no expression, an expression with no cast, a comparison
+against a constant, or an expression that provably cannot set bit 7. **The fix
+is `& 0xFF` instead of `(unsigned char)`**, which compiles to a correct 8-bit
+compare; copying to a local does not help, and widening the operand works only
+because it removes the byte-typed operand.
+
+The first guess written down here — "do not pass bytes as `unsigned char`
+parameters" — was wrong in both directions, and is corrected in
+`X816_Calypsi/README.md`. It was drawn from the one failing case before the
+matrix existed, which is exactly the habit §6.1 and H-3 warn about.
+
+**Blast radius, measured:** three instances in the whole C tree, and all three
+are harmless — `fat32.c`'s `up()` casts only `'a'-'z'`, `keyscan.c` masks with
+`0x7F`, `shtest.c` counts 0..7. None can set bit 7. **No shipped code is
+wrong.** But each was safe by an argument nobody had written down, so
+`tools/calypsi_scan.py` now records the three arguments, compiles the tree,
+and fails on a fourth; it runs as `sim/run.sh calypsi` and has a negative
+control that plants the pattern and requires it to be caught.
+
+The general lesson is the one this document keeps re-learning, and it applies
+to both findings. A-1 was found by needing `X` for something else, not by
+reviewing the check that depended on it — and that check carried a comment
+explaining precisely why it mattered. A comment asserting a test's value is not
+evidence of it. A-2's first explanation was a rule fitted to a single data
+point; the matrix that replaced it took twenty minutes and changed the answer.
+
+### §6.3 The 4bpp scanout test, and an emulator-only divergence
+
+**A-3. `L0_BASEX` did nothing in the emulator.** VERA816.md §5.0 had left the
+4bpp scanout case untested on the grounds that it "shares the same widened
+`bm_line_addr_tmp` and `l0_addr`" — the reasoning H-3 punished. Writing it
+(`run-scanout.sh --4bpp`, `SCAN4.BIN`) found a bug, though not in the shared
+path: both of those were correct, and 4bpp based at `$00000` renders all 480
+lines including past the line-409 wrap.
+
+What broke was the **extended tile base**. The 4bpp framebuffer is based at
+`$20000` — 153,600 bytes there clear the register windows outright, so the
+test needs neither §2.2's choreography nor the blitter — and that made it the
+first thing in the tree to write `L0_BASEX` non-zero. Everything else writes
+the reset value, so the register had never been shown to do anything at all.
+
+`video.c`'s `refresh_layer_properties()` recomputes the cached `map_base` and
+`tile_base`, and is reached only from a write to `$9F2D-$9F33` / `$9F34-$9F3A`.
+The `L0_BASEX`/`L1_BASEX` writes at DCSEL 32 set the variable and returned
+without it, so a program that set `TILEBASE` and then extended it — the
+natural order — left the cache holding the un-extended base. **FIXED**: the
+two cases now refresh.
+
+**The RTL was correct throughout**, and that is the part worth keeping.
+`top.v` feeds `{l0_basex_r[3:2], l0_tile_baseaddr_r}` combinationally; there
+is no cache to go stale. So this is the mirror image of H-3 and H-4 — those
+were RTL-only divergences the emulator got right, this is an emulator-only one
+the RTL got right. The lesson is not "check the RTL harder"; it is that two
+implementations of one spec disagree in **both** directions, and only a test
+that drives the real path finds either.
+
+**Item 4 therefore needs no Quartus round.** It needed a test, an emulator
+fix, and a hardware *run* of `SCAN4.BIN` against the existing bitstream.
+
+### §6.4 FX: a test written, and a change decided against (2026-08-02)
+
+**A-4. FX had no test at all.** Nothing in the tree exercised line draw,
+polygon fill, the 32-bit cache or affine mode — FX arrived working from
+upstream and had been carried unexercised ever since. That was tolerable only
+while nobody touched it, and VERA816.md §9 was proposing exactly that (an
+`FX_BASEX` widening the two affine base registers). A change inside
+`addr_data.v`'s FX section would have been completely unguarded.
+
+`examples/vera/fxtest.c` + `run-fx.sh` now covers affine: six checks against
+a plain-C tilemap reference written from the documented semantics rather than
+from the RTL's expressions, with a negative control that shifts the reference
+by one bit. **FX affine is correct in both implementations** — no divergence,
+unlike `L0_BASEX` in §6.3.
+
+Two hardware properties surfaced, each after a failing run, and both belong to
+anyone writing Mode 7 code: the affine sub-pixel remainder **survives a
+position write** (position bits `[8:1]` are not writable), and it **starts at
+half a pixel** rather than zero, consistently in RTL and emulator. A
+whole-pixel increment hides both — which is why the identity walk passed while
+the fractional one failed at exactly the third sample.
+
+Worth recording that **two of the three failures were the test's fault**, not
+the hardware's: `walk()` programmed the increment into its model but not into
+FX, and one check inherited the previous check's increments. The diagnostic
+output — sample index, got, want, position — found each in a single run. A
+test that configures its model and not the device under test is checking
+itself, which is the §6.1 lesson wearing different clothes.
+
+**And the change was decided against.** `run-fx.sh` measures 6.00 cycles per
+pixel for the FX read alone. Since the cost is per pixel and independent of
+depth, that puts full-screen 640×480 affine at ~2.5 fps — and full-screen
+640×480 8bpp is the *only* configuration `FX_BASEX` would have enabled. At
+320×240, where affine is fast enough to use, roughly 51 KB remains free below
+`$20000` for the sources and there is no constraint at all. So the one case
+that needed the fix is the one nobody would ship. VERA816.md §9.1 records the
+limit as normative and deliberate, with the numbers; §5.0 points at it, since
+"the last removable limit" is an argument that will be made again.
+
+The test stays regardless — it is the guard if this is ever reopened, and the
+two properties above are worth having written down.
+
+**Known gap:** `fxtest.c`'s read-plus-store loop reports zero elapsed cycles
+and the cause has not been found. It prints `UNMEASURED` rather than a
+plausible number, so the "realistic" column in §9.1 is inferred from the
+measured floor rather than measured. The conclusion holds either way — at the
+floor, 640×480 is still 4.3 fps — but the loose end is real and is named here
+rather than left in a comment.

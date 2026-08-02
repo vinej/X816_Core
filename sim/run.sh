@@ -13,6 +13,10 @@
 #                     # real 352 KB main_ram; fill/copy/wrap/contention)
 #   ./run.sh lint     # elaborate VERA's top and FAIL on any port/connection
 #                     # width mismatch (see the target for why this exists)
+#   ./run.sh contract # core<->ROM<->emulator constants: generated files
+#                     # current, and every hand-written site still agrees
+#   ./run.sh calypsi  # compile the C tree and fail on a NEW instance of the
+#                     # 5.18 sign-extension miscompile (see the target)
 #   ./run.sh all      # everything
 #
 # The DUT chain is the real RTL: p65c816_flat_wrap + bank0_ram + boot_rom
@@ -106,16 +110,73 @@ run_lint () {
   echo "*** PASS ***"
 }
 
+# ---------------------------------------------------------------------------
+# contract -- the constants the bitstream, the ROMs and the emulator share.
+#
+# Same argument as lint, one layer up. lint catches a WIDTH that stopped
+# matching between two RTL files; this catches an ADDRESS that stopped
+# matching between the RTL, the boot ROM, the runtime and the emulator. Both
+# failures are silent by construction -- Verilog truncates, and a stale
+# localparam still elaborates -- and both are found in a second here or on a
+# board an hour later.
+#
+# --selftest is the negative control and runs first: it perturbs every value
+# and requires each check to go red, because a verifier that has never been
+# seen to fail is one nobody should trust.
+# ---------------------------------------------------------------------------
+run_contract () {
+  python ../tools/contract.py --selftest >/dev/null || {
+    python ../tools/contract.py --selftest
+    echo "*** FAIL: a contract check is vacuous ***"; return 1; }
+  echo "[TB] every contract site fails when fed a wrong value (negative control)"
+  python ../tools/contract.py --check | grep -E "FAIL|STALE|MISSING" && {
+    echo "*** FAIL: the contract has drifted ***"; return 1; }
+  echo "[TB] generated files current; every hand-written site agrees"
+  echo "*** PASS ***"
+}
+
+# ---------------------------------------------------------------------------
+# calypsi -- the compiler's own silent failure mode.
+#
+# The third target in this file that exists because a miscompile or a
+# truncation is invisible until a board disagrees with you. Calypsi 5.18
+# compiles `<byte from memory> == (unsigned char)(expr)` as a 16-bit compare
+# with mismatched extensions, so any value with bit 7 set compares unequal to
+# itself -- and values below $80 do not, which is why it presents as
+# intermittent rather than as a bug.
+#
+# There are three instances in the tree and all three are harmless, each by a
+# value-range argument. Those arguments are written into tools/calypsi_scan.py
+# and a FOURTH instance fails here, which is the whole point: "harmless" was
+# true of the first three by luck of what they compute, not by design.
+# ---------------------------------------------------------------------------
+run_calypsi () {
+  python ../tools/calypsi_scan.py --selftest >/dev/null || {
+    python ../tools/calypsi_scan.py --selftest
+    echo "*** FAIL: the miscompile scan does not detect its own pattern ***"
+    return 1; }
+  echo "[TB] the scan detects a planted miscompile and clears its fix"
+  python ../tools/calypsi_scan.py --check | grep -E "NEW|GONE|FAIL" && {
+    echo "*** FAIL: an unaccounted sign-extension site ***"; return 1; }
+  echo "[TB] every sign-extension site in the C tree is a known-harmless one"
+  echo "*** PASS ***"
+}
+
 case "${1:-all}" in
-  boot)   run_boot 1 bootprobe.hex $PROBE_LEN ;;
-  fw)     run_boot 2 fwprobe.hex   $FWPROBE_LEN ;;
-  noboot) run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  blit)   run_blit ;;
-  lint)   run_lint ;;
-  all)    echo "----- lint (VERA port widths) -----";  run_lint
+  boot)     run_boot 1 bootprobe.hex $PROBE_LEN ;;
+  fw)       run_boot 2 fwprobe.hex   $FWPROBE_LEN ;;
+  noboot)   run_boot 0 bootprobe.hex $PROBE_LEN ;;
+  blit)     run_blit ;;
+  lint)     run_lint ;;
+  contract) run_contract ;;
+  calypsi)  run_calypsi ;;
+  all)    echo "----- contract (shared constants) -----"; run_contract
+          echo "----- calypsi (compiler miscompile scan) -----"; run_calypsi
+          echo "----- lint (VERA port widths) -----";  run_lint
           echo "----- boot (staged program) -----";    run_boot 1 bootprobe.hex $PROBE_LEN
           echo "----- fw (kernel firmware) -----";     run_boot 2 fwprobe.hex   $FWPROBE_LEN
           echo "----- blit (VRAM blitter) -----";      run_blit
           echo "----- noboot (bands fallback) -----";  run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  *)      echo "unknown target: $1 (boot | fw | noboot | blit | lint | all)"; exit 1 ;;
+  *)      echo "unknown target: $1 (boot | fw | noboot | blit | lint | contract | calypsi | all)"
+          exit 1 ;;
 esac

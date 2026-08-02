@@ -297,10 +297,51 @@ X816_Calypsi already carries. `EXIT` returns control to the prompt.
 
 | Call | Arguments | Returns |
 |---|---|---|
-| `MEM_ALLOC` | 32-bit size in a block | `C:X` = 24-bit address |
+| `MEM_ALLOC` | `C` = size low 16, `X` = size high 16 | `C:X` = 24-bit address |
 | `MEM_FREE` | `C:X` = address | — |
 
 Flat 24-bit addresses. There is no banking API because there is no banking.
+
+**The size is a register pair, not a parameter block** — an earlier draft of
+this table said "32-bit size in a block", and it was changed before anything
+implemented it. Three reasons, in order of weight:
+
+1. A parameter block would make the one call whose job is *"I have nothing,
+   give me something"* require the caller to already have twelve bytes of
+   writable memory to describe the request. That is a bootstrapping wart
+   nothing else in this ABI has.
+2. §4's own rule admits "up to three 16-bit values in `C`, `X`, `Y`". A 32-bit
+   size is two of them, so the block was never required.
+3. `FS_SIZE` already carries a 32-bit value as `C` plus `X`. The split is an
+   established convention here, not a new one.
+
+The cost is that `MEM_ALLOC` can never grow a fourth argument without a new
+call number. That is accepted: alignment and zeroing are the plausible
+candidates, and both are better served by a library over one big block than
+by a flag every caller has to pass.
+
+**What it hands out.** `$20:0000-$EF:FFFF`, from `X816_HEAP_BASE` — banks
+`$20-$EF`, 13.6 MB. Everything below already has an owner: `$00` is BRAM,
+`$01-$0F` is the program image, `$10-$1F` is `FarRAM` and the `EXEC` staging
+area. `tools/contract.py --check` verifies that the linker scripts and the
+arena still meet exactly, with no gap and no overlap, because a disagreement
+there would hand a program its own `far` data as scratch.
+
+**Granularity.** Sizes round up to one page and every returned address is
+page-aligned — a 65816 direct page must be page-aligned to avoid a cycle
+penalty on every `dp` access, and a caller taking a block to use as one should
+not have to align it again.
+
+**A fixed table, not a free list.** `X816_HEAP_BLOCKS` live allocations, held
+in one page at `X816_HEAP_TABLE` that `MEM_ALLOC` never hands out. Boundary
+tags — a header immediately before each block — would put the bookkeeping one
+byte past the end of what the caller was given, so the commonest overrun there
+is would corrupt the allocator and surface in a later, unrelated call. Exceeded
+cleanly with `KERR_NOSPACE`. A program needing a thousand small objects takes
+one block and sub-allocates: that is a library's job by §2.1's second test, and
+the policy is one the kernel has no business freezing.
+
+Nothing is zeroed, and there is no `realloc`.
 
 ### 5.6 System
 
@@ -398,6 +439,23 @@ on the kernel.
 **A test that cannot fail proves nothing** — each one needs its negative
 control, as `run-emu.sh --negative` does in X816_Calypsi.
 
+Test 7 is **written and green**: `X816_Calypsi/examples/kernel/memtest.c`,
+run by `run-mem.sh` (with `--negative`) and shipped on the card as
+`MEMTEST.BIN`. "Distinct non-overlapping ranges" is the weakest property
+worth checking — an allocator that returned the same address every time would
+fail it and almost nothing else would — so it is one of seven, and every one
+of them **writes through the address the kernel returned and reads it back**.
+An allocator that hands out plausible, disjoint, page-aligned addresses backed
+by nothing passes every arithmetic check there is; only a store-and-load
+distinguishes an allocator from an address generator. The seven are: a first
+allocation is aligned and backed; three live blocks are pairwise disjoint; a
+freed block is reused at *exactly* its own address; the refusals (zero,
+oversized, unaligned free, free of a non-block, double free) each report the
+right `KERR_`; a refused allocation leaves the heap byte-identical; the table
+fills, refuses with `KERR_NOSPACE`, and recovers completely; and filling eight
+adjacent blocks disturbs none of them — which is the check that would find
+bookkeeping living inside the arena.
+
 ---
 
 ## 9. Order of work
@@ -424,9 +482,18 @@ The console and file management both stand on FAT32, so:
 The table exists and is green in the emulator: `runtime/kerntab.s` and
 `runtime/kernel.h` in X816_Calypsi, tested by `examples/shell/kerntest.c`.
 
+Both of those are now generated from one source. The call numbers in
+`kernel.h` and the 64 rows of `kern_proto` in `kerntab.s` used to be two
+hand-kept lists — one giving each call a NUMBER, the other giving it a
+POSITION — with nothing checking that entry 21 in one was entry 21 in the
+other. A mismatched pair produces no diagnostic anywhere: the program jumps to
+a real, working, wrong routine. Adding or moving a call now means editing the
+`CALLS` table in `X816_core/tools/contract.py`, which emits both.
+
 **Implemented:** the eight console entries 0–7, the fifteen filesystem
 entries 16–30, `EXEC` (32, `runtime/kexec.c`) and `EXIT` (33, a guarded
-restart through the firmware entry), plus `SYS_VERSION` (48) returning
+restart through the firmware entry), `MEM_ALLOC` and `MEM_FREE` (40/41,
+`runtime/kmem.c`, §5.5) and `SYS_VERSION` (48) returning
 `$0001`. Everything else is `k_nosys` — carry set, `C` = `KERR_NOSYS`.
 All 64 slots are filled, so calling an unimplemented number is a clean refusal
 rather than a jump into whatever bank `$00` happened to contain, and filling a
@@ -538,13 +605,55 @@ the rest of the tree.
 
 | Module | Blocked on |
 |---|---|
-| `storage/load` | `LOAD`/`SAVE` with PRG headers, BASIC `SYS` stubs and VRAM loads through `LOAD`'s A register. The X816 answer is `EXEC` (§5.4) plus flat addresses, and `EXEC` is not implemented — this is a redesign, not a retarget. |
+| `storage/load` | **No longer blocked** — this row said "`EXEC` is not implemented" and that stopped being true when `K_EXEC` landed (§10). What remains is the redesign it also names: `LOAD`/`SAVE` carry PRG headers, BASIC `SYS` stubs and VRAM loads through `LOAD`'s A register, none of which describe this machine. The X816 answer is `EXEC` plus flat addresses, so the module's interface changes rather than its innards — same shape as `fileio`, which is done. |
 | `storage/dos` | the DOS command channel: `"S:FILE"` strings sent to a drive. The native equivalents are `FS_DELETE`, `FS_RENAME`, `FS_MKDIR`, so the module's whole *interface* changes. |
 | `storage/bmx` | ~30 `CHRIN`/`READST` sites. Mechanical — `fio_getc` and `fio_read` are already there — but 942 lines, and it is a library either way (§2.3). |
-| `storage/bank`, `mem` | need `MEM_ALLOC`/`MEM_FREE`, which are still `k_nosys`. §2.3: reshaped into a plain allocator handing out 24-bit addresses, not ported. |
-| `system/irq`, `clock` | need `IRQ_SET` and the time source (§5.6). |
+| `system/irq`, `clock` | need `IRQ_SET` and the time source (§5.6), neither of which exists. Note L-4 in `doc/AUDIT.md` before designing the clock: SD transfers freeze the VIAs, so a VIA-derived time source drifts with card activity. |
 
-`core/const_kernal.asm` is still sourced, so those five still assemble against
+`core/const_kernal.asm` is still sourced, so those four still assemble against
 the KERNAL symbols. Removing it is the last step, not the first: a build that
 had to choose between the two tables could not contain a module halfway
 between them.
+
+### 11.4 `storage/bank`, `bankalloc` and `mem` — done, by collapsing them
+
+**Converted 2026-08-01**, and the shape changed rather than the names, which
+is what §2.3 means by *port the intent, not the shape*.
+
+`storage/bank` managed the 8 KB window at `$A000`; `storage/bankalloc` was a
+bitmap handing out bank **numbers** to map into it. The window, `RAM_BANK`,
+"offset 0..8191", the copies that auto-advance across bank boundaries — every
+one of those exists to work around 64 KB of address space, and this machine
+has 16 MB. There is no window to map, so there is nothing to select, so a bank
+number is not a thing to allocate.
+
+So all three collapse into one `storage/mem`:
+
+| X16 | X816 |
+|---|---|
+| `bank_alloc` / `bank_free` | `mem_alloc` / `mem_free` — over `MEM_ALLOC`/`MEM_FREE` |
+| `bank_peek` / `bank_poke` | `mem_peek` / `mem_poke`, 24-bit, no window |
+| `mem_to_bank`, `bank_to_mem`, `bank_copy_far`, `mem_copy` | `mem_copy` — the distinction was window-versus-flat |
+| `bank_set` / `bank_get` | gone; nothing to select |
+| `bank_alloc_init` / `bank_reserve` | gone; the kernel owns the pool |
+| `mem_fill`, `mem_crc` | reimplemented natively — there is no KERNAL to wrap |
+| `mem_decompress` | **dropped**: it was one instruction of x16lib and 700 of X16 ROM. A decompressor is not a memory routine, `util/zx0` already provides one, and §2.1 says choosing a compression format is the program's call. |
+
+`bank.asm` and `bankalloc.asm` stay in the tree but are out of the
+`X16_USE_STORAGE` bundle — pay-per-use, like `storage/iec`, and they describe
+a machine this is not.
+
+Two properties were kept deliberately. Addresses in `$00:9F00-$00:9FFF` are
+**not** advanced, so a copy or fill streams through VERA's data port with no
+staging buffer — the one genuinely useful thing about the KERNAL originals.
+And `mem_copy` handles overlap by direction, which is the only reason it is
+more than a byte loop.
+
+Green in the emulator with a negative control:
+`X816_Calypsi/examples/kernel/run-libmem.sh`, shipped on the card as
+`LIBMEM.BIN` so it also meets the resident kernel. `mem_crc` is checked
+against the **published** CRC-16/IBM-3740 value for `"123456789"` (`$29B1`)
+rather than against itself, and the negative control patches the *library* —
+it disables the copy-direction logic and requires test 5 to catch the smear.
+That control earned its keep immediately: the first version of it patched a
+file the C preprocessor never read, reported a pass, and proved nothing.

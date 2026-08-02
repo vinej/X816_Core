@@ -357,6 +357,13 @@ and is really three independent ones — only the first about memory size:
    fitted.
 3. **The renderer↔arbiter wire widths.** AUDIT.md H-3, equal in every mode.
 
+A fourth exists and is **deliberately kept**: FX affine's two base registers
+reach only the first 128 KB. It is not in the list above because it limits
+where affine's *source data* may live rather than what a display can scan
+out, and because §9.1 decides — with a measurement — that lifting it would
+buy a configuration too slow to use. Read §9.1 before proposing an
+`FX_BASEX`; the argument for one is more obvious than it is good.
+
 For 640-wide bitmaps, stock VERA's 15-bit result truncates as:
 
 | depth | shift | stock wraps after | frame bytes | stock verdict |
@@ -372,10 +379,35 @@ memory alone would never have fixed either. 320-wide 8bpp shifts by 4 and
 wraps after line 409, comfortably clear of 240 lines, which is why 320×240
 worked and hid the problem.
 
-VERA816 removes all three. §8 test 5 covers the 8bpp case on hardware; the
-4bpp path shares the same widened `bm_line_addr_tmp` and `l0_addr` and is
-**not independently tested**, which is the reasoning H-3 punished — a 4bpp
-variant of `scanout.c` is the cheap way to close that.
+VERA816 removes all three, and **both high-colour modes are now tested**.
+§8 test 5 covers 8bpp; `run-scanout.sh --4bpp` covers 4bpp, built from the
+same source with `USE_4BPP=1` and shipped as `SCAN4.BIN`.
+
+Writing it was worth more than the arithmetic suggested, which is the point.
+The 4bpp case *does* share `bm_line_addr_tmp` and `l0_addr`, and both were
+correct — but the test based its framebuffer at `$20000` (153,600 bytes there
+clear the register windows outright, so it needs neither §2.2's choreography
+nor the blitter), and that made it **the first thing in this tree to write
+`L0_BASEX` non-zero**. Everything else writes the reset value, which proves
+nothing about the register. It failed immediately, and the fault was in the
+**emulator**: `refresh_layer_properties()` recomputes the cached `map_base`
+and `tile_base` and is reached only from a write to `$9F2D-$9F33`, so a
+program that set `TILEBASE` and then extended it with `BASEX` — the natural
+order — left the cache holding the un-extended base. The layer rendered from
+`$00000` while the CPU port wrote where it was told, so every read-back the
+program could do still passed.
+
+Two things worth keeping from that:
+
+* **The RTL was right.** `top.v` feeds `{l0_basex_r[3:2], l0_tile_baseaddr_r}`
+  combinationally; there is no cache to go stale. This is the mirror image of
+  AUDIT.md H-3 and H-4 — an emulator-only divergence, where those two were
+  RTL-only — and it says the risk runs in both directions.
+* **`--4bpp-negative` breaks the right thing.** Flattening the ramp would only
+  re-prove what `--negative` already proves, so it clears `L0_BASEX` instead:
+  the layer then fetches from `$00000` while the program still paints and
+  verifies at `$20000` through the data port, so every read-back passes and
+  only the screen can catch it. 453 of 480 lines wrong.
 
 ### 5.1 Sprite data above 128 KB — normative
 
@@ -526,6 +558,36 @@ written against VERA816.
    paints straight through anyway — the live windows then rewrite the
    palette from the picture's own pixels and **all 480 lines come out
    wrong**, which is what makes the positive run mean something.
+   Test 5 runs a **third** time at 640×480 **4bpp** based at `$20000`
+   (`run-scanout.sh --4bpp`, shipped as `SCAN4.BIN`) — §5.0's other broken
+   mode, wrapping after line 409 rather than 204 and taking a different arm
+   of the line-address shift. It is also the only image in this tree that
+   writes `L0_BASEX` non-zero, and therefore the only one that proves the
+   widened tile base does anything; everything else writes the reset value.
+   Its negative control (`--4bpp-negative`) clears `L0_BASEX`, so the layer
+   fetches from `$00000` while the program still paints and verifies at
+   `$20000` through the data port — every read-back passes and only the
+   screen catches it. 153,600 bytes at `$20000` clear the register windows
+   outright, so this build needs neither §2.2's choreography nor the blitter.
+9. **FX affine (§9.1).** `examples/vera/fxtest.c` + `run-fx.sh`, at 320×240
+   with map and tile data below 128 KB — so it needs no RTL change and
+   asserts nothing about `FX_BASEX`. Six checks: FX returns a texture rather
+   than a constant; an identity walk; a **fractional** increment (the
+   sub-pixel stepping affine exists for); a two-axis walk with a negative x
+   step; clipping (outside the map gives tile 0); and wrapping (with clip off
+   the map repeats). Each is compared against a plain-C tilemap walk written
+   from the documented semantics, **not** from the RTL's own expressions —
+   otherwise the test would prove only that two copies of one reading agree.
+   `--negative` shifts that reference by one bit and the walks must disagree.
+   It also **measures** the affine fill rate, which is what §9.1's decision
+   rests on.
+
+   Two properties it pinned down, both of which cost a failing run and both
+   of which any Mode 7 code will meet: the sub-pixel remainder **survives a
+   position write** (bits `[8:1]` of the position are not writable at all),
+   and it **starts at half a pixel**, not zero — `fx_pixel_pos_x_r <=
+   20'd256` in the RTL, `0x8000` in the emulator, which agree. A whole-pixel
+   increment hides both completely.
 
 > **Status of 6 and 7: GREEN ON HARDWARE**, DE10-Nano, 2026-08-01, with the
 > 14:18 bitstream. `BLITTEST.BIN` paints green and shows one **white**
@@ -549,19 +611,78 @@ written against VERA816.
 
 * Every stock VERA register address, layout and reset value
 * Palette, sprite attribute RAM storage, line buffers, audio, SPI
-* VERA FX, and DCSEL 0-6 — **with a consequence worth naming, because it is
-  the last surviving 128 KB limit.** `addr_data.v`'s `fx_map_base_address_r`
-  and `fx_tiledata_base_address_r` are 6 bits shifted left 11, so FX **affine
-  mode can only reach the first 128 KB**. FX's own `ADDR0`/`ADDR1` are full
-  19-bit, so line-draw, poly-fill and cache writes reach everywhere; only the
-  two affine base registers are narrow. This collides with a 640×480 8bpp
-  framebuffer, which occupies exactly that space. Lifting it needs two more
-  bits per base — an `FX_BASEX` in the DCSEL 32 bank, same shape as
-  `L0_BASEX` — and is therefore an amendment to this list, not a bug fix.
+* VERA FX, and DCSEL 0-6 — unchanged, and **decided so**, see §9.1.
 * The `$9F20-$9F3F` window position in the X816 I/O page
 * Sprite and tile rendering semantics — only address widths change, plus the
   two formerly reserved sprite-attribute bits §5.1 gives meaning to (zero =
   stock behaviour)
+
+### 9.1 FX affine reaches only the first 128 KB — normative, and deliberate
+
+**Decided 2026-08-02: this stays. There is no `FX_BASEX`.** What follows is
+the limit, why it is not worth lifting, and the measurement that settled it —
+recorded because "the last removable limit" is an argument that will be made
+again by whoever reads §5.0 next.
+
+**The limit.** `addr_data.v`'s `fx_map_base_address_r` and
+`fx_tiledata_base_address_r` are 6 bits shifted left 11, giving a 17-bit
+address. So **all FX affine source data — the tilemap and the tile data —
+must live below `$20000`.** FX's own `ADDR0`/`ADDR1` are full 19-bit, so line
+draw, polygon fill and cache writes reach the whole 352 KB; only the two
+affine base registers are narrow.
+
+Lifting it would be small: two more bits per base, and `$9F2A`'s high nibble
+in the DCSEL-32 bank is free (`{4'b0, l0_basex_r}` on read), so it needs no
+new register and no new bank. Defaulting the bits to zero would preserve
+stock behaviour exactly, the same way §5.1's sprite-attribute bits do. It was
+never a difficulty. It is simply not worth it.
+
+**Why not — the arithmetic that decides it.** Affine is CPU-mediated: one
+read from `DATA1` per pixel, and one store to put the pixel somewhere. The
+cost is therefore **per pixel and independent of colour depth** — 640×480 is
+307,200 pixels at 4bpp and at 8bpp alike, so the lower depth buys nothing.
+
+`examples/vera/run-fx.sh` measures **6.00 cycles per pixel** for the FX read
+alone, on the emulator at 8 MHz. That is a floor; a real fill also stores.
+
+| affine area per frame | pixels | floor | realistic |
+|---|---|---|---|
+| 640×480 | 307,200 | 230 ms | ~2.5 fps |
+| 320×240 | 76,800 | 57 ms | ~10 fps |
+| 640×160 strip | 102,400 | 77 ms | ~7 fps |
+| 320×120 strip | 38,400 | 29 ms | ~20 fps |
+
+The rule is to budget by **pixels affine-mapped per frame**, not by screen
+mode: roughly 8,000 at 60 fps, 16,000 at 30, 32,000 at 15.
+
+**And that is what makes the limit moot.** `FX_BASEX` is needed for exactly
+one configuration — affine alongside a *full-screen 640×480 8bpp*
+framebuffer, which occupies `$00000-$4AFFF` and leaves affine nowhere to put
+its sources. That configuration is also the one the table says is far too
+slow to build. The single case that needed the fix is the case nobody would
+ship.
+
+At the resolutions where affine *is* fast enough to use, there is no
+constraint at all. A 320×240 8bpp framebuffer is 76,800 bytes,
+`$00000-$12BFF`, leaving about **51 KB free below `$20000`** — a 128×128
+tilemap (16 KB) and 256 tiles of 8×8 data (16 KB) fit with room to spare, at
+the 2048-byte base granularity the registers impose.
+
+**Normative, for software:** place FX affine tilemaps and tile data below
+`$20000`. Nothing else in VERA816 constrains where VRAM objects go; this one
+does.
+
+**Reopen this only if** a concrete program wants affine over a full-screen
+640×480 8bpp picture *and* can live with a few frames per second — or if the
+fill loop gets substantially cheaper than 6 cycles/pixel. The guard for that
+work already exists: `run-fx.sh` covers affine addressing, so the widening
+would not be attempted blind (§8 test 9).
+
+**One honest gap in the above.** The read-only figure is measured; the
+"realistic" column is inferred from it, because the read-plus-store loop in
+`fxtest.c` reports zero elapsed cycles and the cause has not been found — the
+test says `UNMEASURED` rather than printing a number. The conclusion does not
+depend on it: at the optimistic floor 640×480 is still 4.3 fps.
 
 ## 10. Consequence for the core
 
