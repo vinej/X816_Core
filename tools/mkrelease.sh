@@ -28,15 +28,26 @@ CORE=$(cd "$(dirname "$0")/.." && pwd)
 CALYPSI=${CALYPSI_DIR:-$(cd "$CORE/../X816_Calypsi" 2>/dev/null && pwd || echo "")}
 OUT="$CORE/releases/mister"
 
-# NEWEST by modification time, across both locations. Picking "whichever glob
+# NEWEST by modification time, across every location. Picking "whichever glob
 # matched last" shipped a stale bitstream from releases/ while a fresher one sat
 # in output_files/ -- and a core that is a day old but labelled as current is
 # indistinguishable from a core that is broken.
-RBF_SRC=$(ls -t "$CORE"/output_files/X816_*.rbf "$CORE"/releases/X816_2*.rbf \
-          2>/dev/null | head -1)
+#
+# THE UNDATED output_files/X816.rbf IS IN THIS LIST ON PURPOSE. That is the
+# name Quartus actually writes; the dated one exists only because someone
+# renames it by hand afterwards, which puts a manual step between compiling
+# and shipping. A FORGOTTEN rename does not fail loudly -- it leaves an older
+# DATED file as the newest match, so the release quietly ships the previous
+# build. That is the same failure the four stale-artefact incidents had,
+# reached from a new direction. Nothing else needed changing: the stamp below
+# already comes from the file's mtime rather than its name, so the undated
+# file packages correctly without being renamed at all.
+RBF_SRC=$(ls -t "$CORE"/output_files/X816.rbf "$CORE"/output_files/X816_*.rbf \
+          "$CORE"/releases/X816_2*.rbf 2>/dev/null | head -1)
 if [ -z "$RBF_SRC" ]; then
     echo "no built bitstream found." >&2
-    echo "  expected output_files/X816_<date>.rbf -- run the Quartus compile first." >&2
+    echo "  expected output_files/X816.rbf or X816_<date>.rbf --" >&2
+    echo "  run the Quartus compile first." >&2
     exit 1
 fi
 
