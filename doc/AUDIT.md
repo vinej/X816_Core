@@ -818,6 +818,53 @@ reference the library should match; `run-membench.sh` labels them accordingly
 now, because as "MVNCOPY" they read as a target the library was failing to
 hit.
 
+### Ordinary code from SDRAM costs 4.5x, and the emulator cannot see it
+
+`BANKBNCH.BIN` on a DE10-Nano. One workload, assembled once, run twice: in
+place in bank `$01` and again from a copy in bank `$00`. Same bytes, same
+data, same alignment; only the fetch path differs. Data is in bank `$00` for
+**both** runs, which isolates instruction fetch — and is the realistic case,
+since the small data model already puts a program's data there.
+
+| | ms | cycles/iteration |
+|---|---:|---:|
+| bank `$01` — SDRAM | 850 | 104.2 |
+| bank `$00` — BRAM | 190 | 23.3 |
+| **ratio** | | **4.47x** |
+| the emulator, for comparison | 188 | 23.0 |
+
+**The prediction going in was "less than 2.5x" and it was wrong.** §6.2's MVN
+figure was *damped*: its data accesses were SDRAM in both arms, so a large
+common cost sat in numerator and denominator alike. Isolate fetch and the true
+penalty appears. Anything that measures a ratio while both sides pay the same
+unavoidable cost understates it, and this pair is the worked example.
+
+**The constant.** 80.9 extra cycles across 16 fetched bytes is ~5 extra per
+byte, so **~6 cycles per SDRAM access against 1 for BRAM**. That model then
+predicts the MVN result without being fitted to it: five accesses per byte x
+6.06 = 30.3 cycles/byte, against 30.0 measured. Two unrelated benchmarks
+landing on one constant is the strongest evidence in this document.
+
+**AND THE CALIBRATION FACT, WHICH IS WORTH MORE THAN THE BENCHMARK.** The
+emulator took 188 ms; hardware BRAM took 190. The emulator is a faithful model
+of a uniform single-cycle machine, and bank `$00` *is* one. Therefore:
+
+* emulator timings are **accurate** for bank-`$00` code
+* emulator timings are **optimistic by ~4.5x** for bank-`$01` code, which is
+  where every program's code lives
+
+That is a rule for reading every timing this tree produces, and it is why the
+MVN stub's 2.5x was invisible until `MEMBENCH.BIN` met the board. The emulator
+is not wrong; it models one of the machine's two memories and has never been
+told about the other.
+
+**What it changes.** `doc/VERA_MEMORY_REVIEW.md` §1.3 concluded the gaming
+bottleneck is fill rate — one `sta` per pixel, a CPU-throughput limit. A 4.5x
+CPU is a 4.5x fill rate, which is a change of kind rather than degree. It also
+settles the "should x16lib be rewritten 16-bit" question that `run-membench.sh`
+was built for: register width is worth at most 2x, *where the code lives* is
+worth 4.5x. See VERA_MEMORY_REVIEW.md §4.
+
 ### Four bugs the rewrite produced, and what each one teaches
 
 Recorded because every one of them was silent, and three were found by a test

@@ -143,3 +143,48 @@ The one-line answer: **the 352 KB decision holds — capacity was never the
 gaming bottleneck, fill rate is; fix fill rate with FX now and a small VRAM
 blitter next, and keep VERA2 as a well-specified deferred option** for the
 day 8bpp double-buffering or >352 KB of pixels becomes a real requirement.
+
+---
+
+## 4. Amendment, 2026-08-02 — both premises of §3 have moved
+
+§3 said "reopen C only on a concrete trigger" and listed triggers of one kind:
+a title needing double-buffered 640x480 8bpp, >352 KB of live assets, a GUI
+whose save-under exceeds VRAM. None of those has happened. Something else did,
+and it undercuts §3's *reasoning* rather than meeting its conditions.
+
+**Measured on hardware (AUDIT.md §6.2): code executing from SDRAM runs 4.47x
+slower than the same code from BRAM.** ~6 cycles per SDRAM access against 1.
+
+That touches both premises this section rests on:
+
+1. **"CPU-from-SDRAM contention" (§1.2) was the first cost listed against C.**
+   It is real and now quantified — but it is also *removable*. Give the CPU's
+   code BRAM and it stops competing for SDRAM at all, which is precisely the
+   condition a VERA2 SDRAM framebuffer needs. The two changes each dissolve
+   the other's blocker: C needs the CPU out of SDRAM, and getting the CPU out
+   of SDRAM needs BRAM that only C can free. §1.2 assessed them separately
+   because at the time moving the CPU was not on the table.
+
+2. **"Capacity is not today's bottleneck, fill rate is" (§1.3) still holds —
+   and now cuts the other way.** Fill rate is one `sta` per pixel, a CPU
+   throughput limit. A 4.5x CPU is a 4.5x fill rate. The conclusion that
+   moving the framebuffer to SDRAM does not make games faster remains correct;
+   what changed is that *making the CPU faster* does, and the same BRAM
+   reallocation delivers both.
+
+**What does NOT change.** The other costs §2 priced against C are untouched:
+burst reads on the SDRAM side (still "the real work"), the byte-lane carve-out,
+the missing `DISPBASE` page flip, the `$9F60` bank, an emulator model, a
+contract doc and conformance tests. C is still a project, not a port.
+
+**One correction to §1.2's arithmetic.** It estimated SDRAM at "one 16-bit word
+per ~9-cycle access". Measured, it is ~6 CPU cycles per access. The direction
+of the argument is unchanged; the tax is a third smaller than assumed.
+
+**And a methodology note that applies to everything above.** The emulator
+matched hardware BRAM to within 1% (188 ms against 190) and understated SDRAM
+by 4.5x. Every fps and fill-rate figure in §1 derived from emulator timings is
+therefore optimistic for code running in bank `$01`. That does not overturn the
+§1 conclusions -- they compare like with like -- but any *absolute* number in
+this document should be read as a bank-`$00` figure.
