@@ -288,33 +288,51 @@ pixels as it draws, and the picture simply comes up in the wrong colours, which
 looks nothing like an address bug. The largest clear run is therefore
 **129,472 bytes** (`$00000-$1F9BF`).
 
-### What fits
+### What fits — and what the renderer can scan
 
-| Mode | Bytes | Single | Double |
-|---|---:|:--:|:--:|
-| 640×480 8bpp | 307,200 | ❌ | ❌ |
-| 640×480 4bpp | 153,600 | ❌ | ❌ |
-| 640×240 8bpp | 153,600 | ❌ | ❌ |
-| 640×480 2bpp | 76,800 | ✅ | ❌ |
-| 640×240 4bpp | 76,800 | ✅ | ❌ |
-| **320×240 8bpp** | **76,800** | **✅** | ❌ |
-| 320×240 4bpp | 38,400 | ✅ | ✅ (76,800) |
-| 640×480 1bpp | 38,400 | ✅ | ✅ (76,800) |
+**Two independent limits, and memory is only one of them.** A bitmap mode has
+to fit in VRAM *and* be one the layer renderer can address to the last line.
 
-**No 640×480 mode above 2bpp fits — 4bpp included.** 4bpp is 153,600 bytes
-against 131,072 of VRAM: it misses by 22,528, so it is not a near-fit that some
-layout trick recovers. 640×240 8bpp is the same 153,600 and fails identically.
+The second limit is easy to miss.
+[layer_renderer.v:191-197](../vera/fpga/source/graphics/layer_renderer.v#L191-L197)
+computes the bitmap line address from `line_idx_mul5` (`line_idx × 5`) and
+**truncates it differently per mode**:
+
+| Depth / width | Line-address expression | Truncated to | Usable lines |
+|---|---|:--:|---:|
+| 8bpp / 640 | `{line_idx_mul5[9:0], 5'b0}` | 10 bits | **205** |
+| 8bpp / 320 | `{line_idx_mul5[10:0], 4'b0}` | 11 bits | 410 |
+| 4bpp / 640 | `{line_idx_mul5[10:0], 4'b0}` | 11 bits | 410 |
+| 4bpp / 320, and all 2bpp / 1bpp | full `line_idx_mul5` | — | 512 |
+
+Past the cap the address wraps and the top of the screen repeats. This is stock
+VERA v0.9 behaviour, not something the X816 changed.
+
+Putting both limits together, at 128 KB:
+
+| Mode | Bytes | Fits VRAM | Renderer can scan it | Usable |
+|---|---:|:--:|:--:|:--:|
+| 640×480 8bpp | 307,200 | ❌ | ❌ (205 lines) | ❌ |
+| 640×240 8bpp | 153,600 | ❌ | ❌ (205 lines) | ❌ |
+| 640×480 4bpp | 153,600 | ❌ | ❌ (410 lines) | ❌ |
+| 640×200 8bpp | 128,000 | ✅ (just) | ✅ | ⚠️ leaves 1,472 B |
+| **320×240 8bpp** | **76,800** | **✅** | **✅** | **✅** |
+| 640×240 4bpp | 76,800 | ✅ | ✅ | ✅ |
+| 640×480 2bpp | 76,800 | ✅ | ✅ | ✅ |
+| 320×240 4bpp | 38,400 | ✅ | ✅ | ✅ double-buffers |
+| 640×480 1bpp | 38,400 | ✅ | ✅ | ✅ double-buffers |
+
+**No 640×480 mode above 2bpp is reachable.** 4bpp fails twice over: 153,600
+bytes against 131,072 of VRAM, and the renderer wraps at line 410 of 480. 8bpp
+fails harder — it could never scan more than 205 lines even with 352 KB, which
+is why the withdrawn 640×480 8bpp work needed the framebuffer *and* a renderer
+that could reach it.
 
 **320×240 8bpp is the practical bitmap mode.** 76,800 bytes leaves ~52 KB for
-tiles and sprites, and `blit816` clears it in ~0.8 ms against ~38 ms through the
-CPU data port ([BLIT816.md](BLIT816.md)) — which is what makes it usable at
-8 MHz at all. Double-buffering it does not fit; page-flipping at 4bpp does.
-
-**A second, independent limit applies to 640-wide 8bpp** regardless of memory:
-[layer_renderer.v:197](../vera/fpga/source/graphics/layer_renderer.v#L197)
-truncates the 8bpp/640-wide line address to 10 bits, wrapping after ~204 lines.
-Any 640-wide mode needs its line-address arithmetic checked as well as its byte
-count — fitting in memory is necessary, not sufficient.
+tiles and sprites, the renderer scans it with room to spare, and `blit816`
+clears it in ~0.8 ms against ~38 ms through the CPU data port
+([BLIT816.md](BLIT816.md)) — which is what makes it usable at 8 MHz at all.
+Double-buffering it does not fit; page-flipping at 4bpp does.
 
 ### Why high resolution is VERA2's job, not VRAM's
 
