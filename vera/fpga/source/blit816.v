@@ -1,15 +1,26 @@
 //`default_nettype none
 //============================================================================
-// blit816.v -- VERA816 VRAM blitter (doc/VERA816.md "The blitter").
+// blit816.v -- VRAM bulk fill/copy engine (doc/BLIT816.md).
 //
-// WHY THIS EXISTS.  The X816 keeps its framebuffer in real VRAM (VERA816,
-// 352 KB) instead of the X16 core's SDRAM "VERA2" layer -- see
-// doc/VERA_MEMORY_REVIEW.md.  What that trade lacked was VERA2's one genuine
-// gaming asset: bulk fill/copy that does not go through the CPU's 8-bit data
-// port.  This engine is that asset, aimed at VRAM: FILL and COPY over the
-// 19-bit byte space, running on a fifth, LOWEST-priority vram_if port, so it
-// can never disturb scanout -- it soaks up idle VRAM slots (all of them in
-// blanking, the leftovers during active display).
+// WHY THIS EXISTS.  VERA gives the CPU one 8-bit data port, so clearing a
+// framebuffer costs one `sta` per byte: the 76,800 bytes of a 320x240 8bpp
+// screen is ~38 ms at 8 MHz, a 26 fps ceiling before anything is drawn.  This
+// engine does the same fill in under a millisecond by moving 32 bits per VRAM
+// slot, which is what makes bitmap modes usable in 128 KB at all.
+//
+// It runs on a fifth, LOWEST-priority vram_if port, so it can never disturb
+// scanout -- it soaks up idle VRAM slots (all of them in blanking, the
+// leftovers during active display).  That is also why it has no cycle
+// guarantee: it is fast, not deterministic.
+//
+// 2026-08-02: narrowed from the 19-bit VERA816 address space back to stock
+// VERA's 17 bits when VRAM returned to 128 KB.  That also RETIRED A LATENT
+// BUG: cache_tag_r is 15 bits and was compared against a 17-bit src_n[18:2],
+// so a source read crossing a 128 KB boundary could report a false cache hit
+// and copy the wrong bytes.  At 17-bit addresses the widths match exactly.
+//
+// This is the only non-stock register bank left in VERA; see doc/VERA816.md
+// for the 352 KB extension that was removed at the same time.
 //
 // Programming model (registers live in top.v's DCSEL=33 bank, $9F29-$9F2C):
 //   BLT_IDX  ($9F29 R/W)  index into the parameter file, 0-9
@@ -18,18 +29,17 @@
 //   BLT_CTRL ($9F2B W)    bit0 = start COPY, bit1 = start FILL
 //            ($9F2B R)    bit0 = busy
 //   BLT_ID   ($9F2C R)    $B6 -- feature detect
-//   parameters: 0-2 SRC (19-bit byte addr, little-endian, [18:16] in byte 2)
+//   parameters: 0-2 SRC (17-bit byte addr, little-endian, bit 16 in byte 2)
 //               3-5 DST, 6-8 LEN (bytes), 9 = fill VALUE
 //
 // Semantics (the contract -- emulator implements the same):
 //   * Byte-granular: any SRC/DST alignment, any LEN. LEN=0 starts nothing.
 //   * COPY is ascending. Overlap is defined only for DST < SRC or disjoint
-//     ranges (the VERA2 "doubling" idiom, DST = SRC+LEN, is disjoint).
-//   * Addresses wrap modulo 512 KB, matching the data-port auto-increment.
-//     The unpopulated top 160 KB behaves as VRAM does there: reads 0, write
-//     discarded (main_ram bounds-checks).
+//     ranges (the "doubling" idiom, DST = SRC+LEN, is disjoint).
+//   * Addresses wrap modulo 128 KB, matching stock VERA's data-port
+//     auto-increment wrap.  LEN is 17 bits, so one operation covers all VRAM.
 //   * SRC/DST/LEN read back as the engine left them (LEN=0, pointers at
-//     one-past-end) -- same convention as VERA2's readable pointer.
+//     one-past-end).
 //   * Parameter writes while busy are ignored.
 //
 // Speed: FILL runs at a 32-bit word per granted slot on aligned runs; COPY
@@ -51,7 +61,7 @@ module blit816(
     output wire        busy,
 
     // VRAM word port (vram_if interface 4 -- lowest priority)
-    output reg  [16:0] vram_addr,
+    output reg  [14:0] vram_addr,
     output reg  [31:0] vram_wrdata,
     output reg   [7:0] vram_wrnibblesel,
     input  wire [31:0] vram_rddata,
@@ -62,20 +72,20 @@ module blit816(
     //////////////////////////////////////////////////////////////////////////
     // Parameter file (doubles as the working counters while running)
     //////////////////////////////////////////////////////////////////////////
-    reg [18:0] src_r, dst_r, len_r;
+    reg [16:0] src_r, dst_r, len_r;
     reg  [7:0] val_r;
     reg        op_fill_r;
 
     always @* case (reg_idx)
         4'd0:    reg_rddata = src_r[7:0];
         4'd1:    reg_rddata = src_r[15:8];
-        4'd2:    reg_rddata = {5'b0, src_r[18:16]};
+        4'd2:    reg_rddata = {7'b0, src_r[16]};
         4'd3:    reg_rddata = dst_r[7:0];
         4'd4:    reg_rddata = dst_r[15:8];
-        4'd5:    reg_rddata = {5'b0, dst_r[18:16]};
+        4'd5:    reg_rddata = {7'b0, dst_r[16]};
         4'd6:    reg_rddata = len_r[7:0];
         4'd7:    reg_rddata = len_r[15:8];
-        4'd8:    reg_rddata = {5'b0, len_r[18:16]};
+        4'd8:    reg_rddata = {7'b0, len_r[16]};
         4'd9:    reg_rddata = val_r;
         default: reg_rddata = 8'h00;
     endcase
@@ -116,16 +126,16 @@ module blit816(
 
     // Post-write pointer/length advance, evaluated combinationally so the ack
     // cycle can both retire this access and launch the next.
-    wire [18:0] step   = wr_is_word_r ? 19'd4 : 19'd1;
-    wire [18:0] len_n  = len_r - step;
-    wire [18:0] dst_n  = dst_r + step;
-    wire [18:0] src_n  = src_r + step;
+    wire [16:0] step   = wr_is_word_r ? 17'd4 : 17'd1;
+    wire [16:0] len_n  = len_r - step;
+    wire [16:0] dst_n  = dst_r + step;
+    wire [16:0] src_n  = src_r + step;
 
-    wire fill_word_first = (len_r >= 19'd4) && (dst_r[1:0] == 2'b00);
-    wire fill_word_n     = (len_n >= 19'd4) && (dst_n[1:0] == 2'b00);
-    wire copy_word_n     = (len_n >= 19'd4) && (dst_n[1:0] == 2'b00) && (src_n[1:0] == 2'b00);
-    wire cache_hit_n     = cache_valid_r && (cache_tag_r == src_n[18:2]);
-    wire copy_word_now   = (len_r >= 19'd4) && (dst_r[1:0] == 2'b00) && (src_r[1:0] == 2'b00);
+    wire fill_word_first = (len_r >= 17'd4) && (dst_r[1:0] == 2'b00);
+    wire fill_word_n     = (len_n >= 17'd4) && (dst_n[1:0] == 2'b00);
+    wire copy_word_n     = (len_n >= 17'd4) && (dst_n[1:0] == 2'b00) && (src_n[1:0] == 2'b00);
+    wire cache_hit_n     = cache_valid_r && (cache_tag_r == src_n[16:2]);
+    wire copy_word_now   = (len_r >= 17'd4) && (dst_r[1:0] == 2'b00) && (src_r[1:0] == 2'b00);
 
     always @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -151,13 +161,13 @@ module blit816(
                 case (reg_idx)
                     4'd0: src_r[7:0]   <= reg_wrdata;
                     4'd1: src_r[15:8]  <= reg_wrdata;
-                    4'd2: src_r[18:16] <= reg_wrdata[2:0];
+                    4'd2: src_r[16]    <= reg_wrdata[0];
                     4'd3: dst_r[7:0]   <= reg_wrdata;
                     4'd4: dst_r[15:8]  <= reg_wrdata;
-                    4'd5: dst_r[18:16] <= reg_wrdata[2:0];
+                    4'd5: dst_r[16]    <= reg_wrdata[0];
                     4'd6: len_r[7:0]   <= reg_wrdata;
                     4'd7: len_r[15:8]  <= reg_wrdata;
-                    4'd8: len_r[18:16] <= reg_wrdata[2:0];
+                    4'd8: len_r[16]    <= reg_wrdata[0];
                     4'd9: val_r        <= reg_wrdata;
                     default: ;
                 endcase
@@ -170,7 +180,7 @@ module blit816(
                         cache_valid_r <= 0;
                         if (start_fill) begin
                             // first fill write straight away
-                            vram_addr        <= dst_r[18:2];
+                            vram_addr        <= dst_r[16:2];
                             vram_wrdata      <= {4{val_r}};
                             vram_wrnibblesel <= fill_word_first ? 8'hFF : byte_mask(dst_r[1:0]);
                             wr_is_word_r     <= fill_word_first;
@@ -179,7 +189,7 @@ module blit816(
                             state_r          <= ST_WR;
                         end else begin
                             // copy: fetch the first source word
-                            vram_addr  <= src_r[18:2];
+                            vram_addr  <= src_r[16:2];
                             vram_write <= 0;
                             strobe_r   <= 1;
                             state_r    <= ST_RD;
@@ -189,10 +199,10 @@ module blit816(
 
                 ST_RD: if (vram_ack) begin
                     cache_r       <= vram_rddata;
-                    cache_tag_r   <= src_r[18:2];
+                    cache_tag_r   <= src_r[16:2];
                     cache_valid_r <= 1;
                     // launch the write this fetch was for
-                    vram_addr        <= dst_r[18:2];
+                    vram_addr        <= dst_r[16:2];
                     vram_wrdata      <= copy_word_now ? vram_rddata
                                                      : {4{word_byte(vram_rddata, src_r[1:0])}};
                     vram_wrnibblesel <= copy_word_now ? 8'hFF : byte_mask(dst_r[1:0]);
@@ -212,7 +222,7 @@ module blit816(
                         vram_write <= 0;
                         state_r    <= ST_IDLE;
                     end else if (op_fill_r) begin
-                        vram_addr        <= dst_n[18:2];
+                        vram_addr        <= dst_n[16:2];
                         vram_wrdata      <= {4{val_r}};
                         vram_wrnibblesel <= fill_word_n ? 8'hFF : byte_mask(dst_n[1:0]);
                         wr_is_word_r     <= fill_word_n;
@@ -220,7 +230,7 @@ module blit816(
                         strobe_r         <= 1;
                     end else if (cache_hit_n) begin
                         // next source byte/word is already in the cache
-                        vram_addr        <= dst_n[18:2];
+                        vram_addr        <= dst_n[16:2];
                         vram_wrdata      <= copy_word_n ? cache_r
                                                         : {4{word_byte(cache_r, src_n[1:0])}};
                         vram_wrnibblesel <= copy_word_n ? 8'hFF : byte_mask(dst_n[1:0]);
@@ -229,7 +239,7 @@ module blit816(
                         strobe_r         <= 1;
                     end else begin
                         // refill the cache from the next source word
-                        vram_addr  <= src_n[18:2];
+                        vram_addr  <= src_n[16:2];
                         vram_write <= 0;
                         strobe_r   <= 1;
                         state_r    <= ST_RD;

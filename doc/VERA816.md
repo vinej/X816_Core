@@ -1,31 +1,57 @@
 # VERA816 — extended VERA specification for X816
 
-> ## AMENDMENT, 2026-08-02: VRAM IS 128 KB, NOT 352 KB
+> # HISTORICAL — VERA816 WAS REMOVED ON 2026-08-02
 >
-> **Everything below describing 352 KB of VRAM describes a configuration that
-> no longer ships.** `main_ram.v` is 32,768 words — stock VERA's 128 KB — and
-> the 224 M10K blocks that held the difference now back banks `$01-$04` as
-> single-cycle program RAM (`rtl/fast_ram.sv`, `doc/MEMORY_MAP.md` §1).
+> **X816's VERA is stock.** Everything this document specifies — the 352 KB
+> VRAM, the 19-bit address space, `ADDRX`, `L0_BASEX`/`L1_BASEX`, `VRAMCAP`,
+> `CTRL816.REGWIN`, the widened sprite-attribute address and the unpopulated-
+> hole rule — **is gone from the RTL and the emulator.** `vera/fpga/source/`
+> is the upstream v47.0.2 port again.
 >
-> **Why:** code executing from SDRAM was measured on hardware at **4.47×
-> slower** than the same code from BRAM (`doc/AUDIT.md` §6.2). Program code
-> loads at `$01:0000`, so moving those banks to BRAM makes every existing
-> binary that much faster by being loaded rather than rewritten. Nothing was
-> using the extra VRAM; the speedup applies to everything.
-> `doc/BRAM_SWITCH.md` records how it was decided, including a switchable
-> design that was tried and could not be built.
+> **The one exception is the blitter.** It never depended on the larger VRAM,
+> so it was kept and narrowed to 17-bit addresses. Its contract moved to
+> **[BLIT816.md](BLIT816.md)**, which supersedes §4.3 below.
 >
-> **What this means for the rest of this document.** The register interface,
-> FX, the blitter, the register windows and the addressing are all unchanged
-> and still normative — VERA816's extensions were always opt-in, so software
-> that does not use the extra space runs exactly as before. What is no longer
-> available is the *capacity*: **640×480 8bpp needs 307,200 bytes and does not
-> fit.** `SCANOUT.BIN`, `SCANFULL.BIN`, `SCAN4.BIN` and `REGWIN.BIN` are
-> written against 352 KB and will not work until this is revisited.
+> ## Why it was removed
 >
-> §9.1's fill-rate analysis is unaffected in its reasoning and improved in its
-> numbers: fill rate is one `sta` per pixel, a CPU-throughput limit, so a
-> 4.47× CPU is a 4.47× fill rate. See `doc/VERA_MEMORY_REVIEW.md` §4.
+> Two decisions, a day apart.
+>
+> **First, the capacity went.** Code executing from SDRAM was measured on
+> hardware at **4.47× slower** than the same code from BRAM (`doc/AUDIT.md`
+> §6.2), so the 224 M10K blocks holding VRAM above 128 KB were given to banks
+> `$01-$04` as single-cycle program RAM (`rtl/fast_ram.sv`). Every existing
+> binary got 2.5–3.9× by being loaded rather than rewritten. Nothing was using
+> the extra VRAM.
+>
+> **Then the extensions went**, because without the capacity they had no
+> purpose and a real cost: they were a permanent, silent divergence from the
+> hardware every X16 program is written against. Stock VERA is the
+> compatibility baseline; **VERA2** — a 1 MB SDRAM framebuffer — is where
+> X816's graphics ambitions go instead, and it is a better place for them now
+> that the CPU no longer competes for SDRAM bandwidth.
+>
+> This also resolved a live inconsistency: after the VRAM shrank, `VRAMCAP`
+> still reported 22 (352 KB) and the emulator still modelled `0x58000`. Both
+> were wrong, and both are now simply absent.
+>
+> ## What went with it
+>
+> `SCANOUT.BIN`, `SCANFULL.BIN`, `SCAN4.BIN` and `REGWIN.BIN` were retired —
+> all four needed 352 KB (a 640×480 8bpp framebuffer is 307,200 bytes).
+> `boot/vramtest.s` went with `VRAMCAP`. `BLITTEST.BIN` and `FXTEST.BIN`
+> survive; both were retargeted to the 17-bit space.
+>
+> **640×480 8bpp is no longer available at all.** That is the real loss, and
+> VERA2 is the intended answer.
+>
+> ## Why this document is kept
+>
+> It is the record of a design that was built, proved on hardware, and then
+> deliberately withdrawn — including several findings that are still true of
+> the stock hardware and cost real time to learn: §2.2's discovery that a
+> framebuffer overlapping `$1F9C0-$1FFFF` silently rewrites the palette from
+> its own pixels, the sprite-reach limit (§5.1), and §9.1's affine fill-rate
+> measurement. Read it as history, not as an interface.
 
 **This document is a contract.** The RTL core and the emulator implement it
 separately, so anything left ambiguous here will diverge silently — software
@@ -33,8 +59,8 @@ developed against one would break on the other, and the failure would surface
 long after the cause. Nothing outside this document is agreed.
 
 Base: VERA v0.9 as ported in this repository (`vera/fpga/source/`, derived from
-X16Community/vera-module v47.0.2). VERA816 is a strict superset: every stock
-VERA register keeps its address, layout and meaning.
+X16Community/vera-module v47.0.2). VERA816 was a strict superset: every stock
+VERA register kept its address, layout and meaning.
 
 ---
 

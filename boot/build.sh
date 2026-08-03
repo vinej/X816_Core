@@ -2,7 +2,10 @@
 # Build a boot ROM overlay image for rtl/boot_rom.sv.
 #
 #   sh build.sh            -> boot.s      (the colour-bands bring-up demo)
-#   sh build.sh vramtest   -> vramtest.s  (the VERA816 conformance test)
+#   sh build.sh sdramtest  -> sdramtest.s (any other .s in this directory)
+#
+# (There used to be a `vramtest` target here -- the VERA816 conformance test.
+# It went with VERA816 on 2026-08-02; see doc/VERA816.md.)
 #
 # Either way the result lands in boot.hex, which is what boot_rom.sv reads
 # with $readmemh.  boot.hex is committed so a plain `quartus_sh --flow compile`

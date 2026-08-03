@@ -83,9 +83,10 @@ pipeline).
 — and extended the same day: `sim/run.sh fw` boots the kernel-firmware path
 (image staged at `$F0:0000` through the loader port, firmware magic branch,
 and an in-probe proof that the firmware **write-protect** drops CPU stores),
-and `sim/run.sh blit` is the VERA816 blitter unit test (eight self-checking
-cases against the real `vram_if` + 352 KB `main_ram`: fills, copies, the
-doubling idiom, LEN=0, 50% renderer contention, wrap-through-hole).
+and `sim/run.sh blit` is the blit816 unit test (eight self-checking cases
+against the real `vram_if` + the stock 128 KB `main_ram`: fills, copies, the
+doubling idiom, LEN=0, 50% renderer contention, and wrap at the top of VRAM
+— see [BLIT816.md](BLIT816.md) §6).
 - `sim816/` ported (targets `stall`, `nostall`, `nat`, `def`, `trace`, `all`):
   the P65C816 under LFSR RDY stalls and the native-mode IRQ path. Green here.
 - `sim/` created with `tb_boot.v`: the real chain

@@ -26,7 +26,7 @@ against them — port over unchanged.
 
 | Block | Files | Change |
 |---|---|---|
-| VERA (video, audio, SPI) | 24 | **6 files widened** — the VERA816 extension: 352 KB VRAM, 19-bit addresses ([VERA816.md](VERA816.md)) |
+| VERA (video, audio, SPI) | 24 | **stock**, plus one added file: the `blit816` fill/copy engine on a fifth VRAM arbiter port ([BLIT816.md](BLIT816.md)). A 352 KB / 19-bit widening lived here until 2026-08-02 ([VERA816.md](VERA816.md)) |
 | IKAOPM (YM2151) | 11 | none |
 | VIA 6522, SMC, I²C, PS/2 bridge | 6 | `smc_x16.sv` — key-FIFO pop-race fix (silently ate keystrokes; found on hardware) + debug taps |
 | `sdram.v` (MiST byte controller) | 1 | none |
@@ -162,10 +162,9 @@ Each is a straight lift from `x16_mister` when wanted, in roughly this order:
      windows hit SDRAM). Measure before enabling.
 
    Note that VERA's own **VRAM is unaffected by any of this** — it is M10K
-   inside `vera/fpga/source/main_ram.v` (widened by VERA816 from 128 KB to
-   352 KB, 8 nibble arrays × 90,112 words — see [VERA816.md](VERA816.md)),
-   reachable only through VERA's data port at `$9F23`/`$9F24`, and it is
-   already present and working in this build.
+   inside `vera/fpga/source/main_ram.v` (stock 128 KB, 16 nibble arrays ×
+   16,384 words), reachable only through VERA's data port at `$9F23`/`$9F24`,
+   and it is already present and working in this build.
 
 ---
 
@@ -200,7 +199,8 @@ Two fixes, in order of value:
    is needed. A small instruction line buffer on top of that is the step after.
 2. **Grow the BRAM window.** Killing the X16's `rom_banks` (256 KB) and
    `lowram_bram` (40 KB) freed ~288 M10K blocks against a 553-block budget that
-   was previously 99% full. Bank 0 currently takes ~52. Most of that headroom
-   has since gone to VERA816's 352 KB VRAM — 506/553 blocks used, 47 free
-   ([MEMORY_MAP.md](MEMORY_MAP.md) §4) — so backing part of bank `$01` too is
-   now a much tighter fit.
+   was previously 99% full. **This step is done:** banks `$01-$04` are now
+   256 KB of BRAM (`rtl/fast_ram.sv`), paid for by returning VERA's VRAM from
+   352 KB to a stock 128 KB. The fit is **540/553 blocks, 13 free**
+   ([MEMORY_MAP.md](MEMORY_MAP.md) §4), so there is no room for a further
+   window without giving something else up.

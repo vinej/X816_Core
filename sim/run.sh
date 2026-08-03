@@ -9,8 +9,8 @@
 #                     # (boot2.rom), firmware magic branch + write-protect
 #   ./run.sh noboot   # no image staged: colour-bands fallback + WAI park
 #                     # (simulates ~1M cpu cycles -- takes a few minutes)
-#   ./run.sh blit     # VERA816 blitter unit test (blit816 + vram_if + the
-#                     # real 352 KB main_ram; fill/copy/wrap/contention)
+#   ./run.sh blit     # blit816 fill/copy engine (blit816 + vram_if + the
+#                     # real 128 KB main_ram; fill/copy/wrap/contention)
 #   ./run.sh fastram  # banks $01-$04 in BRAM: byte lanes, neighbours,
 #                     # the single-cycle read, and the loader crossing
 #   ./run.sh timer    # the $9F90 millisecond counter: rate, the read latch
@@ -95,16 +95,22 @@ run_blit () {
 # ---------------------------------------------------------------------------
 # lint -- port/connection width agreement across the whole VERA tree.
 #
-# WHY THIS IS A TARGET AND NOT A STYLE CHECK. When VRAM grew to 352 KB every
-# renderer's bus_addr and every vram_if port went 15 -> 17 bits, but the three
-# WIRES joining them in top.v stayed at 15. Verilog truncates silently, so
-# layer 0, layer 1 and sprites could only ever fetch from the first 128 KB --
-# for weeks, through a "passing" conformance suite, because every test that
-# checked the widening used the CPU data port (a different, genuinely 19-bit
-# path) and the one test that would have caught it was never implemented.
+# WHY THIS IS A TARGET AND NOT A STYLE CHECK. When VRAM grew to 352 KB (a
+# configuration since reverted -- see doc/VERA816.md) every renderer's bus_addr
+# and every vram_if port went 15 -> 17 bits, but the three WIRES joining them in
+# top.v stayed at 15. Verilog truncates silently, so layer 0, layer 1 and
+# sprites could only ever fetch from the first 128 KB -- for weeks, through a
+# "passing" conformance suite, because every test that checked the widening used
+# the CPU data port (a different, genuinely 19-bit path) and the one test that
+# would have caught it was never implemented.
 #
 # It took a screen on real hardware to find. The simulator names it in six
 # lines and costs seconds, so it runs as a test now.
+#
+# STILL EARNING ITS KEEP AFTER THE REVERT: narrowing blit816 back to 17 bits
+# left its vram_addr port at 17 while top.v's wire went to 15, and this target
+# named the file and line in seconds. The width trap is symmetric -- shrinking
+# an address space truncates exactly as silently as growing one.
 # ---------------------------------------------------------------------------
 run_lint () {
   local vf out n

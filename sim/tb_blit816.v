@@ -1,23 +1,26 @@
 `timescale 1ns/1ps
 // ============================================================================
-// tb_blit816.v -- unit test for the VERA816 VRAM blitter.
+// tb_blit816.v -- unit test for the blit816 VRAM fill/copy engine.
 //
-// Real RTL under test: blit816 + vram_if (with the new lowest-priority if4
-// port) + main_ram (the real 352 KB nibble-array VRAM, including its
-// unpopulated-hole bounds check).  The testbench drives the engine's register
-// interface directly (top.v's DCSEL-33 decode is a mux reviewed separately)
-// and seeds/verifies VRAM through the REAL CPU byte port (if0), so the
-// arbiter's write path is exercised from both masters.
+// Real RTL under test: blit816 + vram_if (with the lowest-priority if4 port)
+// + main_ram (the real stock 128 KB nibble-array VRAM).  The testbench drives
+// the engine's register interface directly (top.v's DCSEL-33 decode is a mux
+// reviewed separately) and seeds/verifies VRAM through the REAL CPU byte port
+// (if0), so the arbiter's write path is exercised from both masters.
 //
-// A behavioral shadow model mirrors every operation, including the
-// contract's edges: byte granularity, ascending copy, address wrap modulo
-// 512 KB, and the $58000-$7FFFF hole (writes discarded, reads 0).
+// A behavioral shadow model mirrors every operation, including the contract's
+// edges: byte granularity, ascending copy, and address wrap modulo 128 KB.
+//
+// 2026-08-02: retargeted from the 19-bit VERA816 space to stock VERA's 17
+// bits.  Every test address above $1FFFF moved, and T8 changed meaning: at
+// 128 KB the whole space is populated, so there is no unpopulated hole to
+// wrap THROUGH -- the test is now a plain modulo-128 KB wrap at $1FFFE.
 //
 // Tests:
-//   T1 fill, word-aligned run          T5 the VERA2 "doubling" idiom
+//   T1 fill, word-aligned run          T5 the "doubling" idiom
 //   T2 fill, misaligned head+tail      T6 LEN=0 is a no-op (busy never rises)
 //   T3 copy, co-aligned (word path)    T7 fill under 50% renderer contention
-//   T4 copy, misaligned (byte path)    T8 wrap through the hole into $00000
+//   T4 copy, misaligned (byte path)    T8 address wrap at the top of VRAM
 //
 // PASS = zero mismatches across all tests.
 // ============================================================================
@@ -34,7 +37,7 @@ module tb_blit816;
     wire       busy;
 
     // ---- engine <-> vram_if ----
-    wire [16:0] b_addr;
+    wire [14:0] b_addr;
     wire [31:0] b_wrdata;
     wire  [7:0] b_wrnibblesel;
     wire [31:0] b_rddata;
@@ -50,7 +53,7 @@ module tb_blit816;
         .vram_ack(b_ack));
 
     // ---- CPU byte port (seed + verify) ----
-    reg  [18:0] c_addr = 0;
+    reg  [16:0] c_addr = 0;
     reg   [7:0] c_wrdata = 0;
     reg         c_strobe = 0, c_write = 0;
     wire  [7:0] c_rddata;
@@ -76,29 +79,33 @@ module tb_blit816;
         .if0_strobe(c_strobe),
         .if0_write(c_write),
 
-        .if1_addr(17'h0), .if1_rddata(), .if1_strobe(1'b0), .if1_ack(),
-        .if2_addr(17'h00123), .if2_rddata(), .if2_strobe(if2_strobe), .if2_ack(),
-        .if3_addr(17'h0), .if3_rddata(), .if3_strobe(1'b0), .if3_ack(),
+        .if1_addr(15'h0), .if1_rddata(), .if1_strobe(1'b0), .if1_ack(),
+        .if2_addr(15'h0123), .if2_rddata(), .if2_strobe(if2_strobe), .if2_ack(),
+        .if3_addr(15'h0), .if3_rddata(), .if3_strobe(1'b0), .if3_ack(),
 
         .if4_addr(b_addr), .if4_wrdata(b_wrdata), .if4_wrnibblesel(b_wrnibblesel),
         .if4_rddata(b_rddata), .if4_write(b_write), .if4_strobe(b_strobe),
         .if4_ack(b_ack));
 
-    // ---- behavioral shadow model, hole included ----
-    localparam integer VRAM_TOP = 'h58000;    // populated bytes: 0..$57FFF
-    reg [7:0] model [0:'h57FFF];
+    // ---- behavioral shadow model ----
+    // 128 KB, fully populated: unlike the 352 KB configuration there is no
+    // unpopulated region, so m_write/m_read need no bounds check -- the 17-bit
+    // address type IS the bound.  They are kept as tasks so the wrap arithmetic
+    // below still reads the same.
+    localparam integer VRAM_TOP = 'h20000;    // populated bytes: 0..$1FFFF
+    reg [7:0] model [0:'h1FFFF];
     integer i;
     initial for (i = 0; i < VRAM_TOP; i = i + 1) model[i] = 8'h00;
 
-    task m_write(input [18:0] a, input [7:0] d);
+    task m_write(input [16:0] a, input [7:0] d);
         if (a < VRAM_TOP) model[a] = d;
     endtask
-    function [7:0] m_read(input [18:0] a);
+    function [7:0] m_read(input [16:0] a);
         m_read = (a < VRAM_TOP) ? model[a] : 8'h00;
     endfunction
 
     // ---- low-level drivers (negedge-timed so posedge sampling is clean) ----
-    task vpoke(input [18:0] a, input [7:0] d);
+    task vpoke(input [16:0] a, input [7:0] d);
         begin
             @(negedge clk);
             c_addr = a; c_wrdata = d; c_write = 1; c_strobe = 1;
@@ -108,7 +115,7 @@ module tb_blit816;
         end
     endtask
 
-    task vpeek(input [18:0] a, output [7:0] d);
+    task vpeek(input [16:0] a, output [7:0] d);
         begin
             @(negedge clk);
             c_addr = a; c_write = 0; c_strobe = 1;
@@ -128,11 +135,11 @@ module tb_blit816;
         end
     endtask
 
-    task set_params(input [18:0] src, input [18:0] dst, input [18:0] len, input [7:0] val);
+    task set_params(input [16:0] src, input [16:0] dst, input [16:0] len, input [7:0] val);
         begin
-            reg8(0, src[7:0]);  reg8(1, src[15:8]);  reg8(2, {5'b0, src[18:16]});
-            reg8(3, dst[7:0]);  reg8(4, dst[15:8]);  reg8(5, {5'b0, dst[18:16]});
-            reg8(6, len[7:0]);  reg8(7, len[15:8]);  reg8(8, {5'b0, len[18:16]});
+            reg8(0, src[7:0]);  reg8(1, src[15:8]);  reg8(2, {7'b0, src[16]});
+            reg8(3, dst[7:0]);  reg8(4, dst[15:8]);  reg8(5, {7'b0, dst[16]});
+            reg8(6, len[7:0]);  reg8(7, len[15:8]);  reg8(8, {7'b0, len[16]});
             reg8(9, val);
         end
     endtask
@@ -159,23 +166,29 @@ module tb_blit816;
 
     // model-side operations (contract semantics: byte-wise, ascending, wrap)
     integer k;
-    reg [18:0] ma;
-    task m_fill(input [18:0] dst, input [18:0] len, input [7:0] val);
+    reg [16:0] ma;
+    task m_fill(input [16:0] dst, input [16:0] len, input [7:0] val);
         for (k = 0; k < len; k = k + 1) begin
-            ma = dst + k[18:0];
+            ma = dst + k[16:0];
             m_write(ma, val);
         end
     endtask
-    task m_copy(input [18:0] src, input [18:0] dst, input [18:0] len);
+    task m_copy(input [16:0] src, input [16:0] dst, input [16:0] len);
         for (k = 0; k < len; k = k + 1)
-            m_write(dst + k[18:0], m_read(src + k[18:0]));
+            m_write(dst + k[16:0], m_read(src + k[16:0]));
     endtask
 
     integer errors = 0;
     reg [7:0] got;
-    task verify(input [18:0] from, input [18:0] to, input [127:0] name);
+    // The loop counter is an INTEGER, not a [16:0] reg. A 17-bit counter can
+    // never terminate a range ending at $1FFFF -- `ma + 1` wraps to 0 and is
+    // still <= to -- which is exactly the range T8 has to check now that VRAM
+    // is 128 KB and the top of it is a real address. Cost one hung sim.
+    integer vk;
+    task verify(input [16:0] from, input [16:0] to, input [127:0] name);
         begin
-            for (ma = from; ma <= to; ma = ma + 1) begin
+            for (vk = from; vk <= to; vk = vk + 1) begin
+                ma = vk[16:0];
                 vpeek(ma, got);
                 if (got !== m_read(ma)) begin
                     errors = errors + 1;
@@ -206,70 +219,73 @@ module tb_blit816;
 
         // T2: fill, misaligned head + tail
         $display("[TB] T2 fill misaligned");
-        for (ma = 'h20000; ma <= 'h20010; ma = ma + 1) vpoke(ma, 8'hEE);
-        set_params(0, 'h20001, 9, 8'h3C);
+        for (ma = 'h12000; ma <= 'h12010; ma = ma + 1) vpoke(ma, 8'hEE);
+        set_params(0, 'h12001, 9, 8'h3C);
         go(1);
-        m_fill('h20001, 9, 8'h3C);
-        verify('h20000, 'h20010, "fill-misaligned");
+        m_fill('h12001, 9, 8'h3C);
+        verify('h12000, 'h12010, "fill-misaligned");
 
         // T3: copy, co-aligned (word fast path)
         $display("[TB] T3 copy aligned");
-        for (ma = 'h30000; ma < 'h30100; ma = ma + 1) vpoke(ma, ma[7:0] ^ 8'h5A);
-        for (ma = 'h303F8; ma <= 'h30518; ma = ma + 1) vpoke(ma, 8'hBB);  // dest field
-        for (ma = 'h306F8; ma <= 'h30718; ma = ma + 1) vpoke(ma, 8'hDD);  // T4 dest field
-        set_params('h30000, 'h30400, 256, 8'h00);
+        for (ma = 'h14000; ma < 'h14100; ma = ma + 1) vpoke(ma, ma[7:0] ^ 8'h5A);
+        for (ma = 'h143F8; ma <= 'h14518; ma = ma + 1) vpoke(ma, 8'hBB);  // dest field
+        for (ma = 'h146F8; ma <= 'h14718; ma = ma + 1) vpoke(ma, 8'hDD);  // T4 dest field
+        set_params('h14000, 'h14400, 256, 8'h00);
         go(0);
-        m_copy('h30000, 'h30400, 256);
-        verify('h303F8, 'h30508, "copy-aligned");
+        m_copy('h14000, 'h14400, 256);
+        verify('h143F8, 'h14508, "copy-aligned");
 
         // T4: copy, misaligned (byte path with source-word cache)
         $display("[TB] T4 copy misaligned");
-        set_params('h30001, 'h30702, 13, 8'h00);
+        set_params('h14001, 'h14702, 13, 8'h00);
         go(0);
-        m_copy('h30001, 'h30702, 13);
-        verify('h306F8, 'h30718, "copy-misaligned");
+        m_copy('h14001, 'h14702, 13);
+        verify('h146F8, 'h14718, "copy-misaligned");
 
         // T5: the VERA2 doubling idiom (disjoint ascending copies)
         $display("[TB] T5 doubling");
-        for (ma = 'h40000; ma < 'h40010; ma = ma + 1) vpoke(ma, ma[3:0] + 8'hC0);
-        set_params('h40000, 'h40010, 16, 8'h00); go(0); m_copy('h40000, 'h40010, 16);
-        set_params('h40000, 'h40020, 32, 8'h00); go(0); m_copy('h40000, 'h40020, 32);
-        verify('h40000, 'h4003F, "doubling");
+        for (ma = 'h16000; ma < 'h16010; ma = ma + 1) vpoke(ma, ma[3:0] + 8'hC0);
+        set_params('h16000, 'h16010, 16, 8'h00); go(0); m_copy('h16000, 'h16010, 16);
+        set_params('h16000, 'h16020, 32, 8'h00); go(0); m_copy('h16000, 'h16020, 32);
+        verify('h16000, 'h1603F, "doubling");
 
         // T6: LEN=0 is a no-op
         $display("[TB] T6 len=0");
-        vpoke('h48000, 8'h77);
-        set_params('h48000, 'h48000, 0, 8'h99);
+        vpoke('h18000, 8'h77);
+        set_params('h18000, 'h18000, 0, 8'h99);
         @(negedge clk); start_fill = 1; @(negedge clk); start_fill = 0;
         repeat (20) @(posedge clk);
         if (busy) begin
             $display("*** FAIL: len=0 raised busy ***"); $finish;
         end
-        verify('h48000, 'h48000, "len0");
+        verify('h18000, 'h18000, "len0");
 
         // T7: fill under 50% renderer contention on if2
         $display("[TB] T7 contention");
-        for (ma = 'h4FFF8; ma <= 'h50110; ma = ma + 1) vpoke(ma, 8'h44);
+        for (ma = 'h19FF8; ma <= 'h1A110; ma = ma + 1) vpoke(ma, 8'h44);
         contend = 1;
-        set_params(0, 'h50000, 256, 8'h81);
+        set_params(0, 'h1A000, 256, 8'h81);
         go(1);
         contend = 0;
-        m_fill('h50000, 256, 8'h81);
-        verify('h4FFF8, 'h50108, "contention");
+        m_fill('h1A000, 256, 8'h81);
+        verify('h19FF8, 'h1A108, "contention");
 
-        // T8: wrap modulo 512 KB through the unpopulated hole
-        $display("[TB] T8 wrap+hole");
+        // T8: address wrap at the top of VRAM, modulo 128 KB.
+        // At 352 KB this test wrapped THROUGH the unpopulated hole and checked
+        // that the discarded writes read back as $00.  128 KB is fully
+        // populated, so all four bytes must now LAND: two at the top of VRAM
+        // and two wrapped to $00000.  Both ends are verified, because a
+        // truncating adder would put all four at the top and still pass a
+        // check that only looked at $00000.
+        $display("[TB] T8 wrap");
         vpoke('h00000, 8'h10); vpoke('h00001, 8'h20); vpoke('h00002, 8'h30);
-        vpoke('h00003, 8'h40); vpoke('h00004, 8'h50);
-        set_params(0, 'h7FFFE, 4, 8'h66);
+        vpoke('h1FFFC, 8'h40); vpoke('h1FFFD, 8'h50);
+        vpoke('h1FFFE, 8'h60); vpoke('h1FFFF, 8'h70);
+        set_params(0, 'h1FFFE, 4, 8'h66);
         go(1);
-        m_fill('h7FFFE, 4, 8'h66);   // 7FFFE/7FFFF in the hole, wraps to 0/1
-        verify('h00000, 'h00004, "wrap-low");
-        vpeek('h7FFFE, tmp);
-        if (tmp !== 8'h00) begin
-            errors = errors + 1;
-            $display("[TB] MISMATCH hole @7FFFE got=%02x want=00", tmp);
-        end
+        m_fill('h1FFFE, 4, 8'h66);   // $1FFFE,$1FFFF then wraps to $00000,$00001
+        verify('h1FFFC, 'h1FFFF, "wrap-top");
+        verify('h00000, 'h00002, "wrap-low");
 
         if (errors == 0) begin
             $display("[TB] all 8 tests clean");

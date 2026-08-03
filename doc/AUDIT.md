@@ -19,6 +19,24 @@ Companion documents: [SIMULATION.md](SIMULATION.md) covers the simulation gap
 and the port from upstream, and [VERA_MEMORY_REVIEW.md](VERA_MEMORY_REVIEW.md)
 covers the VRAM-versus-VERA2 question and why the answer was a blitter.
 
+> **Status note, 2026-08-02 — VERA816 was removed.** This audit is a dated
+> record and is left as written, but several findings below concern an extended
+> VERA that no longer exists: the 352 KB VRAM, the 19-bit address space and
+> everything reached through it. **M-1** (sprite reach above 128 KB), **H-3**
+> and **H-4** (renderer width truncation and register-window write aliasing)
+> were all real, were all fixed, and are now *moot* — at a stock 128 KB there
+> is nothing above 128 KB to reach or to alias onto. The blitter survived and
+> its contract moved to [BLIT816.md](BLIT816.md). §6.2's 4.47× measurement is
+> unaffected and is in fact the reason the VRAM went back to stock. See
+> [VERA816.md](VERA816.md).
+>
+> **H-3's lesson outlived its bug** and is the one to carry forward: a silent
+> Verilog width truncation is invisible to every test that uses a different
+> path. `sim/run.sh lint` exists because of it, and it caught the *same class*
+> of fault again during the revert — narrowing `blit816` left its port at 17
+> bits against a 15-bit wire. Shrinking an address space truncates exactly as
+> silently as growing one.
+
 ---
 
 ## 1. What the system is

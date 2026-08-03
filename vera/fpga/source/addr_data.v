@@ -18,11 +18,9 @@ module addr_data(
 
     input wire         vram_addr_select,
     input wire   [5:0] dc_select,
-    input wire         regwin_hi,          // VERA816 CTRL816.REGWIN (VERA816.md 4.4): windows at $7F9C0 instead of $1F9C0
 
-    output wire  [3:0] vera816_addrx,      // VERA816: {ADDR1[18:17], ADDR0[18:17]} for register readback
-    output wire [18:0] vram_addr_0,
-    output wire [18:0] vram_addr_1,
+    output wire [16:0] vram_addr_0,
+    output wire [16:0] vram_addr_1,
     output wire        vram_addr_nib_0,
     output wire        vram_addr_nib_1,
     output wire  [3:0] vram_addr_incr_0,
@@ -34,7 +32,7 @@ module addr_data(
     output wire  [7:0] vram_data0,
     output wire  [7:0] vram_data1,
 
-    output wire [18:0] ib_addr,
+    output wire [16:0] ib_addr,
     output wire        ib_addr_nibble,
     output wire        ib_4bit_mode,
     output wire        ib_cache_write_enabled,
@@ -63,8 +61,8 @@ module addr_data(
     // Bus accessible registers
     //////////////////////////////////////////////////////////////////////////
 
-    reg [18:0] vram_addr_0_r,                 vram_addr_0_next;
-    reg [18:0] vram_addr_1_r,                 vram_addr_1_next;
+    reg [16:0] vram_addr_0_r,                 vram_addr_0_next;
+    reg [16:0] vram_addr_1_r,                 vram_addr_1_next;
     reg        vram_addr_nib_0_r,             vram_addr_nib_0_next;
     reg        vram_addr_nib_1_r,             vram_addr_nib_1_next;
     reg  [3:0] vram_addr_incr_0_r,            vram_addr_incr_0_next;
@@ -76,7 +74,6 @@ module addr_data(
     reg  [7:0] vram_data0_r,                  vram_data0_next;
     reg  [7:0] vram_data1_r,                  vram_data1_next;
 
-    assign vera816_addrx = {vram_addr_1_r[18:17], vram_addr_0_r[18:17]};
     assign vram_addr_0 = vram_addr_0_r;
     assign vram_addr_1 = vram_addr_1_r;
     assign vram_addr_nib_0 = vram_addr_nib_0_r;
@@ -90,7 +87,7 @@ module addr_data(
     assign vram_data0 = vram_data0_r;
     assign vram_data1 = vram_data1_r;
 
-    reg  [18:0] ib_addr_r,                   ib_addr_next;
+    reg  [16:0] ib_addr_r,                   ib_addr_next;
     reg         ib_addr_nibble_r,            ib_addr_nibble_next;
     reg         ib_4bit_mode_r,              ib_4bit_mode_next;
     reg         ib_cache_write_enabled_r,    ib_cache_write_enabled_next;
@@ -284,9 +281,9 @@ module addr_data(
     end
 
     // Note: we are sign extending here, since it might be a negative number
-    wire [18:0] vram_addr_0_incr_decr_0  = vram_addr_0_r + { {8{incr_decr_0[10]}}, incr_decr_0};
-    wire [18:0] vram_addr_1_incr_decr_1  = vram_addr_1_r + { {8{incr_decr_1[10]}}, incr_decr_1};
-    wire [18:0] vram_addr_1_incr_decr_10 = vram_addr_1_incr_decr_1 + { {8{incr_decr_0[10]}}, incr_decr_0};
+    wire [16:0] vram_addr_0_incr_decr_0  = vram_addr_0_r + { {6{incr_decr_0[10]}}, incr_decr_0};
+    wire [16:0] vram_addr_1_incr_decr_1  = vram_addr_1_r + { {6{incr_decr_1[10]}}, incr_decr_1};
+    wire [16:0] vram_addr_1_incr_decr_10 = vram_addr_1_incr_decr_1 + { {6{incr_decr_0[10]}}, incr_decr_0};
 
      // We *flip* the nibble-bit if a nibble-incrementer is active
     wire        vram_addr_nib_0_incr_decr_0  = vram_addr_nib_0_r ^ (fx_4bit_mode_r && vram_addr_nib_incr_0_r && !vram_addr_incr_0_r);
@@ -307,21 +304,19 @@ module addr_data(
     reg         fx_calculate_addr1_based_on_position_r, fx_calculate_addr1_based_on_position_next;
     reg         fx_increment_on_overflow_r, fx_increment_on_overflow_next;
 
-    reg  [18:0] vram_addr_0_untouched_or_set;
-    reg   [1:0] vram_addr_0_untouched_or_set_hi2;   // VERA816: address bits 18:17
+    reg  [16:0] vram_addr_0_untouched_or_set;
     reg         vram_addr_0_untouched_or_set_bit16;
     reg         vram_addr_0_untouched_or_set_nibble;
     reg   [7:0] vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low;
 
-    reg  [18:0] vram_addr_1_untouched_or_set;
-    reg   [1:0] vram_addr_1_untouched_or_set_hi2;   // VERA816: address bits 18:17
+    reg  [16:0] vram_addr_1_untouched_or_set;
     reg         vram_addr_1_untouched_or_set_bit16;
     reg         vram_addr_1_untouched_or_set_nibble;
     reg   [7:0] vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low;
 
-    reg  [18:0] vram_addr_1_tileindex_lookup;
-    reg  [18:0] vram_addr_1_tiledata_using_tilemap;
-    reg  [18:0] vram_addr_1_start_of_horizontal_fill_line;
+    reg  [16:0] vram_addr_1_tileindex_lookup;
+    reg  [16:0] vram_addr_1_tiledata_using_tilemap;
+    reg  [16:0] vram_addr_1_start_of_horizontal_fill_line;
     reg         vram_addr_nib_1_tiledata_using_tilemap;
     reg         vram_addr_nib_1_start_of_horizontal_fill_line;
 
@@ -342,21 +337,10 @@ module addr_data(
     reg  [2:0]  fx_vram_addr_1_needs_to_be_changed;
     reg         fx_pixel_position_needs_to_be_updated;
 
-    wire [18:0] vram_addr             = (access_addr == 5'h03) ? vram_addr_0_r : vram_addr_1_r;
-    // VERA816: the palette / sprite-attr / audio windows live at the top of the
-    // ORIGINAL 128 KB, so they must only decode when bits 18:17 are zero.
-    // Without this qualifier an address such as $39F00 would alias onto the
-    // palette, which the emulator (comparing full absolute addresses) does not
-    // do -- a silent RTL-only divergence.
-    //
-    // CTRL816.REGWIN (VERA816.md 4.4) moves the windows to the same offsets at
-    // the top of the 512 KB space; the bank qualifier here must track top.v's
-    // ib_addr_winbank or the FX niceties gated below would apply to register
-    // windows (relocated) / be denied to plain VRAM (stock position freed).
-    wire vram_addr_winbank            = vram_addr[18:17] == (regwin_hi ? 2'b11 : 2'b00);
-    wire is_audio_address             = vram_addr_winbank && (vram_addr[16:6]  == 'b11111100111);
-    wire is_palette_address           = vram_addr_winbank && (vram_addr[16:9]  == 'b11111101);
-    wire is_sprite_attr_address       = vram_addr_winbank && (vram_addr[16:10] == 'b1111111);
+    wire [16:0] vram_addr             = (access_addr == 5'h03) ? vram_addr_0_r : vram_addr_1_r;
+    wire is_audio_address             = (vram_addr[16:6]  == 'b11111100111);
+    wire is_palette_address           = (vram_addr[16:9]  == 'b11111101);
+    wire is_sprite_attr_address       = (vram_addr[16:10] == 'b1111111);
 
     //////////////////////////////////////////////////////////////////////////
     // Calculation for X and Y accumulation
@@ -555,22 +539,8 @@ module addr_data(
             vram_addr_0_untouched_or_set_nibble = vram_addr_nib_0_r;
         end
 
-        // VERA816: address bits 18:17 come from ADDRX in the DCSEL=32
-        // extension bank ($9F29), because stock ADDR_H has no spare bits.
-        // Decoded here rather than in top.v so that the bits live with the
-        // address registers they belong to and take part in auto-increment
-        // carry -- ADDRX is a window onto vram_addr_{0,1}[18:17], not a
-        // separate latch. Layout: [1:0] ADDR0[18:17], [3:2] ADDR1[18:17].
-        if (do_write && access_addr == 5'h09 && dc_select == 6'd32) begin
-            vram_addr_0_untouched_or_set_hi2 = write_data[1:0];
-            vram_addr_1_untouched_or_set_hi2 = write_data[3:2];
-        end else begin
-            vram_addr_0_untouched_or_set_hi2 = vram_addr_0_r[18:17];
-            vram_addr_1_untouched_or_set_hi2 = vram_addr_1_r[18:17];
-        end
-
-        vram_addr_0_untouched_or_set = { vram_addr_0_untouched_or_set_hi2, vram_addr_0_untouched_or_set_bit16, vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low};
-        vram_addr_1_untouched_or_set = { vram_addr_1_untouched_or_set_hi2, vram_addr_1_untouched_or_set_bit16, vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low};
+        vram_addr_0_untouched_or_set = { vram_addr_0_untouched_or_set_bit16, vram_addr_0_untouched_or_set_high, vram_addr_0_untouched_or_set_low};
+        vram_addr_1_untouched_or_set = { vram_addr_1_untouched_or_set_bit16, vram_addr_1_untouched_or_set_high, vram_addr_1_untouched_or_set_low};
 
         //////////////////////////////////////////////////////////////////////////
         // ADDR0 control logic and assignment

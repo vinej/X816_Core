@@ -284,7 +284,11 @@ This is VERA v0.9 as shipped. It **cannot** do 640×480 8bpp: that needs 300 KB,
 and [layer_renderer.v:197](../vera/fpga/source/graphics/layer_renderer.v#L197)
 truncates the 8bpp/640-wide line address to 10 bits, wrapping after ~204 lines.
 
-### Planned — 352 KB, 19-bit address
+### Built, then withdrawn — 352 KB, 19-bit address
+
+This layout **shipped between 2026-07 and 2026-08-02** and was then removed:
+the M10K it needed went to banks `$01-$04` instead (§1), which bought every
+program 2.5–3.9×. Recorded because it is the shape VERA2 has to beat.
 
 | Range | Size | Contents |
 |---|---:|---|
@@ -292,6 +296,10 @@ truncates the 8bpp/640-wide line address to 10 bits, wrapping after ~204 lines.
 | `$4B000-$57FFF` | 53,248 B = 52 KB | tilemaps, tile data, sprite data |
 | **populated** | **360,448 B = 352 KB** | |
 | `$58000-$7FFFF` | 163,840 B | unpopulated (19-bit space is 512 KB) |
+
+**640×480 8bpp is therefore not available today.** See
+[VERA816.md](VERA816.md) for what was removed, and §1 for what the memory
+bought instead.
 
 **The 52 KB is not a free choice.** Tilemap, tile and sprite fetches are
 random-access at ~160 scattered accesses per line; only the bitmap layer is
@@ -306,14 +314,19 @@ memory. Anything random-access must stay in BRAM.
 
 ### On-chip M10K — 553 blocks on the 5CSEBA6U23I7
 
-| Consumer | As built | With 352 KB VRAM |
+| Consumer | As built | (the withdrawn 352 KB VRAM build) |
 |---|---:|---:|
 | VERA VRAM | 128 | 352 |
+| `fast_ram` — banks `$01-$04` (256 KB) | 256 | — |
 | `bank0_ram` (64 KB) | 64 | 64 |
 | `boot_rom` (256 B) | 1 | 1 |
-| ascal, line buffers, palette, sprite RAM, FIFOs | 89 | 89 |
-| **Total** | **282 / 553 (51%)** | **506 / 553 (91%)** |
-| Free | 271 | 47 |
+| ascal, line buffers, palette, sprite RAM, FIFOs | 91 | 89 |
+| **Total** | **540 / 553 (98%)** | **506 / 553 (91%)** |
+| Free | **13** | 47 |
+
+**There is no meaningful headroom left.** The fitted design closes timing at
+**+0.072 ns** worst slack. Anything new that wants block RAM — VERA2's line
+buffers included — has to take it from something already here.
 
 Packing runs ~80%: VERA's arrays are nibble-wide (required for VERA FX's 4-bit
 write enables) and M10K's ×4 mode uses 4 of 5 bits per word. Roughly 1 block
@@ -321,7 +334,8 @@ per KB.
 
 For comparison the X16 core sits at **550/553 (99%)** — it had no BRAM left,
 which is exactly why VERA2 had to live in SDRAM. Dropping the 256 KB system ROM
-and 40 KB LowRAM is what makes native 352 KB VRAM affordable here.
+and 40 KB LowRAM is what made the headroom available here; it has now been
+spent on program RAM rather than on VRAM.
 
 ### SDRAM
 

@@ -41,7 +41,7 @@ I/O page:
 quartus_sh --flow compile X816.qpf     # bitstream -> output_files/X816.rbf
 
 sh boot/build.sh                       # boot.hex <- the bands demo (needs cc65)
-sh boot/build.sh vramtest              # boot.hex <- the VERA816 conformance test
+sh boot/build.sh sdramtest             # boot.hex <- any other .s in boot/
 ```
 
 `boot/boot.hex` is committed, so the bitstream builds with no toolchain
@@ -72,64 +72,57 @@ Confirmed on real hardware (DE10-Nano):
 
 | | |
 |---|---|
-| core | VERA816 conformance test, SDRAM, the bands bring-up demo |
+| core | blitter conformance, SDRAM, the bands bring-up demo |
 | console | 80x60 text, the SMC keyboard, Shift |
 | storage | FAT32 read **and write** - create, copy, rename, delete, mkdir, rmdir, from the prompt |
 | programs | `boot1.rom` auto-loads the shell at core start; `run` loads a program off the card and starts it |
 | kernel | **resident**: `boot2.rom` loads it into the write-protected firmware region at `$F0:0000`, so the `$00:FE00` jump table survives `run` (2026-08-01) |
 
-The VERA816 **blitter** ([doc/VERA816.md](doc/VERA816.md) §4.3) is confirmed
-on hardware too: `RUN BLITTEST.BIN` from the demo card exercises fill and copy
-at every alignment above and below 128 KB, the wrap through the unpopulated
-hole, and the firmware write-protect, and comes up green on a DE10-Nano.
+The **blitter** ([doc/BLIT816.md](doc/BLIT816.md)) is confirmed on hardware:
+`RUN BLITTEST.BIN` from the demo card exercises fill and copy at every
+alignment, the wrap at the top of VRAM, and the firmware write-protect, and
+comes up green on a DE10-Nano. It is worth roughly **50×** over the CPU data
+port on a bulk fill — ~0.8 ms against ~38 ms for a 320×240 8bpp screen — which
+is what makes bitmap modes usable at 8 MHz.
 
-That test also found a bug the whole suite had missed, and then confirmed the
-fix. **Sprites, and both tile layers, could only fetch from the first 128 KB**
-— the wires joining the renderers to the VRAM arbiter in `top.v` were still
-15 bits wide when everything at both ends had been widened to 17, and Verilog
-truncates without a word. Everything that had "proved" the 352 KB reached VRAM
-through the CPU data port, which is a different path and was never truncated.
-The failure was almost invisible: a truncated `$34000` lands on `$14000`,
-which held the *other* sprite, so the screen looked plausible. `sim/run.sh
-lint` now fails on any such width mismatch, and the second bitstream renders
-the test's high sprite from above 128 KB correctly.
+**VERA is otherwise stock.** X816 carried an extended VERA — 352 KB of VRAM, a
+19-bit address space, `ADDRX`, `L0_BASEX`, `CTRL816.REGWIN`, widened sprite
+addresses — and **removed all of it on 2026-08-02**. The capacity went first,
+when hardware measurement showed code running **4.47× slower** from SDRAM than
+from BRAM: the 224 M10K blocks holding VRAM above 128 KB were better spent
+backing banks `$01-$04` as program RAM, which made every existing binary
+2.5–3.9× faster without rebuilding it. The extensions followed, because
+without the capacity they bought nothing and cost a permanent silent
+divergence from the hardware every X16 program is written against. Stock VERA
+is the compatibility baseline; **VERA2**, a 1 MB SDRAM framebuffer, is where
+the graphics ambitions go instead. [doc/VERA816.md](doc/VERA816.md) is kept as
+the record.
 
-That left one path untested — the tile layers, which shared the fix but had
-never displayed anything above 128 KB — and the test for it, §8 test 5, had
-never been written. It is written now: `RUN SCANOUT.BIN` puts up a **640×480
-8bpp** picture, the mode the whole 352 KB exists for, as eight colour bands
-whose bottom half is fetched from above 128 KB — white, red, cyan, purple,
-green, blue, yellow, orange, **green on a DE10-Nano** as well as on the
-emulator, with a negative control. Writing it turned up a second
-RTL-only bug in the same neighbourhood — the palette, sprite-attribute and PSG
-*write* decodes ignored address bits [18:17], so `$3FA00` was a second palette
-sitting inside any 640×480 framebuffer. See [doc/VERA816.md](doc/VERA816.md)
-§2.2, which is also why that mode needs the blitter and not just wants it —
-the ~2.5 black rows that flash through the purple band while it paints are
-that window, waiting for the blitter to fill what the CPU may not.
+Two findings from that work outlived it, and both are still true of stock
+hardware:
 
-That dependency is now optional. **`CTRL816.REGWIN`** (§4.4, DCSEL 34)
-relocates the PSG/palette/sprite-attribute windows to `$7F9C0-$7FFFF`, inside
-the unpopulated region, after which the whole 352 KB is plain VRAM: a real
-program sets one bit and paints 640×480 like any other picture — including
-double-buffered 640×480 4bpp and 640×240 8bpp, which fill the 352 KB exactly.
-Opt-in, reset = stock, both implementations, conformance-tested with a
-negative control — and **green on a DE10-Nano**: `RUN REGWIN.BIN` comes up
-blue with one sprite, and `RUN SCANFULL.BIN` draws the same 640×480 picture as
-`SCANOUT.BIN` with the CPU alone, without the black gap (§8 test 8).
+**A width mismatch that no test could see.** Sprites and both tile layers
+could only fetch from the first 128 KB — the wires joining the renderers to the
+VRAM arbiter in `top.v` were still 15 bits wide when everything at both ends
+had been widened to 17, and Verilog truncates without a word. Every test that
+had "proved" the widening used the CPU data port, a different path that was
+never truncated. The failure was almost invisible: a truncated `$34000` lands
+on `$14000`, which held the *other* sprite, so the screen looked plausible. It
+took a display on real hardware to find. `sim/run.sh lint` now fails on any
+such mismatch in seconds — and it earned its keep again during the revert,
+catching `blit816`'s port at 17 bits when its wire had gone to 15. **The trap
+is symmetric: shrinking an address space truncates exactly as silently as
+growing one.**
+
+**A framebuffer can rewrite the palette with its own pixels.** The palette,
+sprite-attribute and PSG windows sit at `$1F9C0-$1FFFF`, inside VRAM. Any
+bitmap large enough to cover that range repaints them as it draws — and the
+picture simply comes up in the wrong colours, which looks nothing like an
+address bug. See [doc/VERA816.md](doc/VERA816.md) §2.2.
 
 The FAT32 writer is verified against **pyfatfs**, an independent
 implementation, rather than against this project's own reader. Two halves
 agreeing proves that they agree, not that either is right.
-
-`sh boot/build.sh vramtest` builds a
-bitstream carrying the conformance test from [doc/VERA816.md](doc/VERA816.md)
-— green on pass, red on fail — and it comes up green on a DE10-Nano as well as
-on the emulator. That proves the full 352 KB is addressable **from the CPU
-data port**, the 19-bit path works including bits 17 and 18, the unpopulated
-region reads zero without aliasing, auto-increment wraps, and `VRAMCAP` reads
-22. It says nothing about the renderers, which reach VRAM by another path
-entirely — a distinction that hid a real bug for weeks (see above).
 
 Power-on runs the boot stub: enters native mode, sets up S/D/DBR, copies
 itself into RAM and drops the ROM overlay, then brings VERA up in 320×240 8bpp
@@ -138,9 +131,7 @@ the CPU, native mode, the flat bus, the I/O decode and video all work.
 
 That one result validates the PLL frequencies, native-mode entry, the boot
 overlay's self-copy and its `SYSCTL` unmapping mid-instruction-stream, bank-0
-BRAM, the VERA bus pipeline and the MiSTer video path — and, because this
-bitstream carries the 352 KB VERA816 widening, that the widening did not break
-stock VERA behaviour.
+BRAM, the VERA bus pipeline and the MiSTer video path.
 
 **SDRAM is confirmed on hardware too.** `sh boot/build.sh sdramtest` builds a
 bitstream carrying [boot/sdramtest.s](boot/sdramtest.s), which walks the bank

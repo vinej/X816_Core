@@ -10,7 +10,7 @@ module vram_if(
     input  wire        clk,
 
     // Interface 0 - 8-bit (highest priority)
-    input  wire [18:0] if0_addr,          // VERA816: 19-bit byte address
+    input  wire [16:0] if0_addr,
     input  wire        if0_addr_nibble,
     input  wire        if0_4bit_mode,
     input  wire        if0_cache_write_enabled,
@@ -24,27 +24,27 @@ module vram_if(
     input  wire        if0_write,
 
     // Interface 1 - 32-bit read only
-    input  wire [16:0] if1_addr,          // VERA816: 17-bit word address
+    input  wire [14:0] if1_addr,
     output wire [31:0] if1_rddata,
     input  wire        if1_strobe,
     output reg         if1_ack,
 
     // Interface 2 - 32-bit read only
-    input  wire [16:0] if2_addr,          // VERA816: 17-bit word address
+    input  wire [14:0] if2_addr,
     output wire [31:0] if2_rddata,
     input  wire        if2_strobe,
     output reg         if2_ack,
 
     // Interface 3 - 32-bit read only
-    input  wire [16:0] if3_addr,          // VERA816: 17-bit word address
+    input  wire [14:0] if3_addr,
     output wire [31:0] if3_rddata,
     input  wire        if3_strobe,
     output reg         if3_ack,
 
-    // Interface 4 - 32-bit read/WRITE, LOWEST priority (VERA816 blitter).
+    // Interface 4 - 32-bit read/WRITE, LOWEST priority (the blit816 engine).
     // Write data + nibble mask come ready-made from the engine; it only ever
     // gets the RAM on cycles nothing above wants, so scanout is untouchable.
-    input  wire [16:0] if4_addr,
+    input  wire [14:0] if4_addr,
     input  wire [31:0] if4_wrdata,
     input  wire  [7:0] if4_wrnibblesel,
     output wire [31:0] if4_rddata,
@@ -55,7 +55,7 @@ module vram_if(
     //////////////////////////////////////////////////////////////////////////
     // Main RAM 128kB (32k x 32)
     //////////////////////////////////////////////////////////////////////////
-    reg  [16:0] ram_addr;
+    reg  [14:0] ram_addr;
     reg  [31:0] ram_wrdata;
     reg   [7:0] ram_wrnibblesel;
     wire [31:0] ram_rddata;
@@ -161,7 +161,7 @@ module vram_if(
     end
 
     always @* begin
-        ram_addr     = 17'b0;
+        ram_addr     = 15'b0;
         if0_ack_next = 1'b0;
         if1_ack_next = 1'b0;
         if2_ack_next = 1'b0;
@@ -169,7 +169,7 @@ module vram_if(
         if4_ack_next = 1'b0;
 
         if (if0_strobe) begin
-            ram_addr     = if0_addr[18:2];
+            ram_addr     = if0_addr[16:2];
             if0_ack_next = 1'b1;
 
         end else if (if1_strobe) begin
