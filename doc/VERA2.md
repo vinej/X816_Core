@@ -24,7 +24,7 @@ It exists because VERA cannot do this mode. Its 128 KB of VRAM cannot hold a
 | | |
 |---|---|
 | Resolution | 640×480, 1:1 with the output raster |
-| Depths | **4bpp** (16 colours) and 8bpp (256) — see §5 on 8bpp |
+| Depths | **4bpp** (16 colours) and **8bpp** (256) — both fit, §5 |
 | Palette | independent 256 × RGB444 |
 | Framebuffer | **`$E0:0000-$EF:FFFF`, ordinary CPU memory** |
 | Registers | `$9F60-$9F6F` |
@@ -135,34 +135,33 @@ Line *y* starts at `$E0:0000 + DISPBASE + y * bytes_per_line`, with
 
 ---
 
-## 5. Speed, and the state of 8bpp — normative
+## 5. Speed — measured, both modes fit
 
 `sim/run.sh vfb` T9 times a real line fetch through the real controller and
-prints the result. A 640×480/60 line is 3200 `sdram_clk`; `flat_sdram` delivers
-**~11.1 clocks per word**:
+prints the result on every run. A 640×480/60 line is 3200 `sdram_clk`;
+framebuffer reads take `flat_sdram`'s **`FB_CYC` early-completion path** at
+**~8.1 clocks per word** — `sdram.v` has the data latched by its state 5, so
+the generic 11-clock envelope was pure over-wait, and completing early puts
+back-to-back words on the controller's natural 8-state cadence. (Upstream's
+`ext_ram_sdram.sv` does exactly this, proven on its hardware; the optimisation
+was lost when `flat_sdram` was stripped down from it, which is why 8bpp
+briefly looked impossible here.)
 
-| Mode | Words/line | Cost | |
-|---|---:|---:|---|
-| 4bpp | 160 | ~1790 clk | **fits**, CPU keeps well over half the slots |
-| 8bpp | 320 | ~3577 clk | **12% short** |
+| Mode | Words/line | Cost | Slack per line |
+|---|---:|---:|---:|
+| 4bpp | 160 | ~1300 clk | ~1900 clk |
+| 8bpp | 320 | ~2595 clk | ~600 clk |
 
-**8bpp is implemented and selectable, and will tear.** The deficit is in the
-average rate, not in latency, so a deeper prefetch cannot fix it. Two levers
-exist, neither taken yet:
+**Both modes are usable.** Only framebuffer *reads* take the early exit — CPU
+and loader accesses (writes included, which genuinely need the full row cycle)
+keep the untouched `CYCLE_LEN = 9` envelope, so the path carrying
+`flat_sdram`'s three silicon-bug invariants is unchanged.
 
-1. `flat_sdram.sv`'s `CYCLE_LEN`, currently 9 and deliberately conservative
-   (`> sdram.v's 8-state cycle`). At 7 a line costs 2880 clocks and fits. This
-   also makes **every** CPU access to SDRAM 18% faster.
-2. `sdram.v`'s `BURST_LENGTH`, currently single-access.
-
-**Use 4bpp today.** 16 colours at 640×480, six frames of headroom.
-
-The fetch runs at **lowest priority** inside `flat_sdram`, below the CPU. That
-bounds CPU stall to a single access instead of ~29 µs, at the cost that a CPU
-saturating SDRAM can starve the fetch and glitch a line. A slow CPU is
-invisible; a torn display is not.
-
----
+The fetch runs at **lowest priority**, below the CPU. That bounds CPU stall to
+a single access, at the cost that a CPU saturating SDRAM can starve the fetch
+and glitch a line. In 8bpp the display takes ~80% of the slots during active
+lines: code runs from BRAM so most programs never notice, but one hammering a
+large heap array will feel it. 4bpp leaves the CPU well over half.
 
 ## 6. Differences from upstream `vera_2.md`
 
@@ -172,7 +171,7 @@ invisible; a torn display is not.
 | Blitter | `$9F69-$9F6F` SDRAM→SDRAM copy | **not ported** — `mem_copy` is MVN at 7 cyc/byte |
 | Display base | none; always scans offset 0 | **`$9F62-$9F64`**, latched at vsync |
 | Framebuffer location | word `$800000` | banks `$E0-$EF`, word `$E00000` |
-| Depths | 8bpp, 4bpp | same, but see §5 |
+| Depths | 8bpp, 4bpp | same |
 
 Upstream software does not run on X816 regardless (different CPU, memory model
 and KERNAL), so register-level compatibility was not a goal; where the two

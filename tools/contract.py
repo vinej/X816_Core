@@ -236,8 +236,8 @@ silently drawing nothing.""",
         Const("X816_VERA2_PALADR", 0x9F66, 4, "palette index, auto-increments"),
         Const("X816_VERA2_PALLO", 0x9F67, 4, "{G,B} latched"),
         Const("X816_VERA2_PALHI", 0x9F68, 4, "{-,R}; commits the entry, idx++"),
-        Const("X816_VERA2_MODE_8BPP", 1, 2, "CTRL[2:1] -- tears until CYCLE_LEN", base=10),
-        Const("X816_VERA2_MODE_4BPP", 2, 2, "CTRL[2:1] -- the usable mode", base=10),
+        Const("X816_VERA2_MODE_8BPP", 1, 2, "CTRL[2:1] = 1: 640x480 256-colour", base=10),
+        Const("X816_VERA2_MODE_4BPP", 2, 2, "CTRL[2:1] = 2: 640x480 16-colour", base=10),
     ])
 
 # ---- the kernel heap --------------------------------------------------------

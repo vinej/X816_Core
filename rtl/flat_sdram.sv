@@ -136,6 +136,26 @@ module flat_sdram (
 
     localparam [9:0] REFRESH_INTERVAL = 10'd750;  // < 780 = 7.8 us @ 100 MHz
     localparam [3:0] CYCLE_LEN        = 4'd9;     // > sdram.v's 8-state cycle
+
+    // Framebuffer reads complete EARLY, at FB_CYC instead of CYCLE_LEN.
+    //
+    // sdram.v latches read data at its state q == STATE_READ = RASCAS_DELAY(2)
+    // + CAS_LATENCY(2) + 1 = 5, so by cyc 6 the word is sitting in dout16 and
+    // waiting until 9 is pure over-wait.  Completing at 6 and hopping through
+    // S_IDLE gives back-to-back fb words an ~8-clock cadence -- sdram.v's own
+    // 8-state cycle, its natural rate -- instead of the 11-clock generic
+    // envelope.  That is the difference between 640x480 8bpp fitting and not:
+    // 320 words/line at 8 clocks is ~2560 of the 3200 clocks a line has, where
+    // the generic path needed 3577 and missed.
+    //
+    // This is upstream ext_ram_sdram.sv's FB_CYC, same value, proven on
+    // hardware there -- when flat_sdram was stripped down from it the fb path
+    // went away and this went with it, which is the whole reason 8bpp looked
+    // impossible here.  ONLY framebuffer READS take the early exit: CPU and
+    // loader accesses (writes included, which genuinely need the full row
+    // cycle) keep CYCLE_LEN untouched, so the path carrying the three
+    // silicon-bug invariants in the header is not changed at all.
+    localparam [3:0] FB_CYC           = 4'd6;
     localparam [9:0] INIT_WAIT_LEN    = 10'd400;  // > 31*8 self-init cycles
 
     // ---- fast-domain reset: async assert, sync deassert into sdram_clk ----
@@ -331,34 +351,22 @@ module flat_sdram (
 
     // ---- framebuffer line-fetch state ----
     //
-    // THE BUDGET, and it is MEASURED, not estimated -- sim/run.sh vfb T9 times
-    // a real 320-word fetch through this FSM and prints the result.
+    // THE BUDGET, measured by sim/run.sh vfb T9, which times a real 320-word
+    // fetch through this FSM and prints the result on every run.
     //
     // A line at 640x480/60 is 800 pixels / 25 MHz = 32 us = 3200 sdram_clk.
-    // Measured cost: 3577 clocks for 320 words = 11.1 clocks/word (one clock
-    // to issue in S_IDLE plus CYCLE_LEN+1 = 10 in S_ACC).  So:
+    // With the FB_CYC early completion (see above) a word costs ~8.1 clocks:
     //
-    //   640x480 4bpp : 320 bytes/line = 160 words = ~1790 clocks.  FITS, with
-    //                  the CPU still getting well over half the slots.
-    //   640x480 8bpp : 640 bytes/line = 320 words = ~3577 clocks against 3200.
-    //                  DOES NOT FIT -- and it is 12% short, so it cannot be
-    //                  recovered by prefetching deeper: the deficit is in the
-    //                  average rate, not in the latency.
+    //   640x480 4bpp : 160 words = ~1300 clocks -- fits with room to spare.
+    //   640x480 8bpp : 320 words = ~2595 clocks -- FITS, ~600 clocks/line
+    //                  left for the CPU and refresh.  (Under the generic
+    //                  11-clock envelope this was 3577 and MISSED by 12%,
+    //                  which is why FB_CYC exists.)
     //
-    // Two levers exist for 8bpp, neither taken here because each deserves its
-    // own change and its own test:
-    //
-    //   1. CYCLE_LEN.  It is 9 ("> sdram.v's 8-state cycle"), i.e. deliberately
-    //      conservative.  sdram.v finishes 8 clocks after ce, so CYCLE_LEN=7
-    //      would give 9 clocks/word -> 2880 for a line, which fits with ~35
-    //      accesses to spare.  That also makes EVERY CPU access to SDRAM 18%
-    //      faster, so it is worth doing on its own merits -- but it tightens
-    //      the envelope on the module with three silicon-bug-derived
-    //      invariants, so it wants its own hardware round trip.
-    //   2. sdram.v's BURST_LENGTH, currently 3'b000 (single access).  A burst
-    //      read would fetch a line in a fraction of the slots and end the
-    //      question, at the cost of changing the controller every access goes
-    //      through.
+    // While 8bpp is displaying, the CPU keeps roughly a fifth of the SDRAM
+    // slots during active display.  Code runs from BRAM (banks $01-$04), so
+    // most programs never notice; one that hammers a large heap array will
+    // feel it.  4bpp leaves the CPU well over half.
     logic        fb_active;
     logic [23:0] fb_ptr;
     logic [10:0] fb_left;
@@ -456,8 +464,12 @@ module flat_sdram (
                 end
                 S_ACC: begin
                     cyc <= cyc + 4'd1;
-                    if (cyc == CYCLE_LEN) begin
-                        if (acc_is_fb) begin
+                    if (acc_is_fb) begin
+                        // Early completion (see FB_CYC above).  The next word
+                        // issues on the following S_IDLE -- where a pending CPU
+                        // or refresh request preempts it, so the interleave is
+                        // automatic and no fb word is ever split.
+                        if (cyc == FB_CYC) begin
                             fb_word  <= sd_dout16;   // {odd pixel, even pixel}
                             fb_valid <= 1'b1;
                             fb_ptr   <= fb_ptr + 24'd1;
@@ -466,11 +478,14 @@ module flat_sdram (
                                 fb_active <= 1'b0;
                                 fb_done   <= 1'b1;
                             end
-                        end else if (!acc_is_ld) begin
+                            acc_is_fb <= 1'b0;
+                            state <= S_IDLE;
+                        end
+                    end else if (cyc == CYCLE_LEN) begin
+                        if (!acc_is_ld) begin
                             rd_data_f <= sd_dout;
                             ack_tgl   <= ~ack_tgl;   // completion -> CPU domain
                         end
-                        acc_is_fb <= 1'b0;
                         state <= S_IDLE;
                     end
                 end

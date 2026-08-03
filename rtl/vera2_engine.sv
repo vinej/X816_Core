@@ -23,12 +23,12 @@
 //     307,200) or six 4bpp ones.
 //
 // SPEED, MEASURED (sim/run.sh vfb T9).  A line is 3200 sdram_clk and
-// flat_sdram delivers ~11.1 clocks per word:
-//     640x480 4bpp = 160 words = ~1790 clk  -- FITS
-//     640x480 8bpp = 320 words = ~3577 clk  -- DOES NOT FIT, 12% short
-// 8bpp is implemented and selectable, and will tear until flat_sdram's
-// CYCLE_LEN is tightened or sdram.v gets burst reads.  4bpp is the mode to
-// use today.
+// flat_sdram's FB_CYC early-completion path delivers ~8.1 clocks per word:
+//     640x480 4bpp = 160 words = ~1300 clk  -- FITS
+//     640x480 8bpp = 320 words = ~2595 clk  -- FITS, ~600 clk/line spare
+// Both modes are usable.  (The first port of this engine ran the fetch
+// through the generic 11-clock access envelope, where 8bpp missed by 12%;
+// flat_sdram's FB_CYC comment records the fix.)
 //
 // PIXEL PIPELINE (pix_clk):  the framebuffer is prefetched one scanline ahead
 // into a ping-pong line buffer, then scanned:

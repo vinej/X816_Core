@@ -59,8 +59,8 @@ X816_VERA2_DISPH     = $9F64       ; display base [19:16]
 X816_VERA2_PALADR    = $9F66       ; palette index, auto-increments
 X816_VERA2_PALLO     = $9F67       ; {G,B} latched
 X816_VERA2_PALHI     = $9F68       ; {-,R}; commits the entry, idx++
-X816_VERA2_MODE_8BPP = 1           ; CTRL[2:1] -- tears until CYCLE_LEN
-X816_VERA2_MODE_4BPP = 2           ; CTRL[2:1] -- the usable mode
+X816_VERA2_MODE_8BPP = 1           ; CTRL[2:1] = 1: 640x480 256-colour
+X816_VERA2_MODE_4BPP = 2           ; CTRL[2:1] = 2: 640x480 16-colour
 
 ; ---- MEM_ALLOC arena
 X816_HEAP_TABLE  = $200000         ; one page of kernel bookkeeping, never handed out
