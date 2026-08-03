@@ -3,7 +3,7 @@
 //
 // Ported from x16_mister/rtl/bitmap_engine.sv.  VERA advertises 640x480 bitmap
 // modes but its 128 KB VRAM cannot hold one, and X816 gave the VRAM that would
-// have held it to program BRAM instead (doc/VERA816.md).  This engine scans a
+// have held it to program BRAM instead (doc/MEMORY_MAP.md).  This engine scans a
 // linear framebuffer out of SDRAM, composited over VERA's output by a mux in
 // x816.sv.  VERA itself is untouched.  OSD-gated, off by default.
 //

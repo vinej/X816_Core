@@ -115,8 +115,8 @@ run_blit () {
 # ---------------------------------------------------------------------------
 # lint -- port/connection width agreement across the whole VERA tree.
 #
-# WHY THIS IS A TARGET AND NOT A STYLE CHECK. When VRAM grew to 352 KB (a
-# configuration since reverted -- see doc/VERA816.md) every renderer's bus_addr
+# WHY THIS IS A TARGET AND NOT A STYLE CHECK. When VRAM grew to 352 KB (an
+# attempt since reverted and removed; git history) every renderer's bus_addr
 # and every vram_if port went 15 -> 17 bits, but the three WIRES joining them in
 # top.v stayed at 15. Verilog truncates silently, so layer 0, layer 1 and
 # sprites could only ever fetch from the first 128 KB -- for weeks, through a

@@ -4,9 +4,8 @@ What the machine comes up in: a prompt that loads programs, moves around the
 filesystem and inspects memory.
 
 **Built: this shell ships in every release and is what the machine boots to**
-(see [README.md](../README.md), "What it does today"). Written before the code, as
-[VERA816.md](VERA816.md), [KERNEL.md](KERNEL.md) and
-[DUREXFORTH.md](DUREXFORTH.md) were. It sits on
+(see [README.md](../README.md), "What it does today"). Written before the code,
+as [KERNEL.md](KERNEL.md) and [DUREXFORTH.md](DUREXFORTH.md) were. It sits on
 [KERNEL.md](KERNEL.md) §5 — console and filesystem — and nothing else.
 
 ---

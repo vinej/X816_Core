@@ -95,8 +95,8 @@ backing banks `$01-$04` as program RAM, which made every existing binary
 without the capacity they bought nothing and cost a permanent silent
 divergence from the hardware every X16 program is written against. Stock VERA
 is the compatibility baseline; **VERA2**, a 1 MB SDRAM framebuffer, is where
-the graphics ambitions go instead. [doc/VERA816.md](doc/VERA816.md) is kept as
-the record.
+the graphics ambitions go instead — and now do: see below. (The extension's
+documents were removed from doc/ on 2026-08-03; git history keeps them.)
 
 Two findings from that work outlived it, and both are still true of stock
 hardware:
@@ -118,7 +118,19 @@ growing one.**
 sprite-attribute and PSG windows sit at `$1F9C0-$1FFFF`, inside VRAM. Any
 bitmap large enough to cover that range repaints them as it draws — and the
 picture simply comes up in the wrong colours, which looks nothing like an
-address bug. See [doc/VERA816.md](doc/VERA816.md) §2.2.
+address bug. [doc/MEMORY_MAP.md](doc/MEMORY_MAP.md) §3 carries the map and
+the 129,472-byte usable figure.
+
+**VERA2 is that graphics home, and it is built** ([doc/VERA2.md](doc/VERA2.md)):
+a 640×480 linear framebuffer — 4bpp and 8bpp, both measured against the SDRAM
+fetch budget — scanned out of banks `$E0-$EF` and composited over VERA behind
+an OSD switch that defaults Off. The framebuffer is **ordinary CPU memory**:
+programs draw with plain stores and MVN block moves, where the upstream design
+needs a register-programmed data port. A vsync-latched display base gives
+tear-free page flips upstream could not do, and 1 MB holds two 8bpp frames or
+six 4bpp ones. Proven end to end on the emulator (`run-v2.sh`: model, codegen
+and negative phases); the hardware round trip is `RUN V2DEMO.BIN` from the
+demo card.
 
 The FAT32 writer is verified against **pyfatfs**, an independent
 implementation, rather than against this project's own reader. Two halves
@@ -255,7 +267,7 @@ pieces (24-bit wrapper, memory split, native-mode entry), what is deliberately
 not wired yet, and the known performance ceiling with the two fixes for it.
 
 [doc/KERNEL.md](doc/KERNEL.md) — **planned.** The small OS: console, filesystem
-and program loading. Written before the code, as VERA816.md was. Decides the
+and program loading. Written before the code. Decides the
 kernel/library boundary by rule rather than case by case, states the flat
 24-bit API and the bank `$00` budget it may claim, and records why there is no
 X16 compatibility shim — it would have covered barely half the calls in the

@@ -72,7 +72,7 @@ pipeline).
 | `sim/tb_wfifo.v` | **adapt** | flat_sdram unit test — same invariants |
 | `sim/tb_smccombo.v`, `tb_i2cboot.v` | **adapt** | expected bytes become key position numbers per X816's `smc_x16.sv` |
 | `sim/tb_periph.v` | **adapt** | drop rtc_x16 section (no RTC) |
-| `sim/tb_verafx.v`, `tb_pcm.v`, `tb_ym.v` | **copy later** | full-VERA compile list at `UP:sim/run.sh:271-288`; VERA816 conformance goes here |
+| `sim/tb_verafx.v`, `tb_pcm.v`, `tb_ym.v` | **copy later** | full-VERA compile list at `UP:sim/run.sh:271-288` |
 | `sim/tb_wai.v` | **adapt** | CPU816 branch only (no wai_shim) |
 | HPS block timing model (`tb_cpu_hps.v`, `sd_card_sim.sv`) | **reference** for the new `tb_sd` | |
 | rom_banks/lowram/cart/nvram/rtc/bitmap/SPI-SD TBs, r65c02/mj65c02 libs, wai_shim | **skip** | X816 deleted the hardware |
@@ -86,7 +86,13 @@ and an in-probe proof that the firmware **write-protect** drops CPU stores),
 and `sim/run.sh blit` is the blit816 unit test (eight self-checking cases
 against the real `vram_if` + the stock 128 KB `main_ram`: fills, copies, the
 doubling idiom, LEN=0, 50% renderer contention, and wrap at the top of VRAM
-— see [BLIT816.md](BLIT816.md) §6).
+— see [BLIT816.md](BLIT816.md) §6). The VERA2 work added two more:
+`sim/run.sh vfb` (the `$E0-$EF` framebuffer window in `flat_sdram`'s address
+map — byte pairs share an SDRAM word, nothing outside moved, and the fetch
+rate is *measured* and printed every run) and `sim/run.sh vera2` (the layer
+end to end, unstubbed: a CPU store at `$E0:0000` comes out as the right pixel
+colour through the real window, stream, line buffer and palette —
+[VERA2.md](VERA2.md) §7).
 - `sim816/` ported (targets `stall`, `nostall`, `nat`, `def`, `trace`, `all`):
   the P65C816 under LFSR RDY stalls and the native-mode IRQ path. Green here.
 - `sim/` created with `tb_boot.v`: the real chain
@@ -119,7 +125,7 @@ line. This is the missing regression for `run`/exec/goshell (AUDIT.md H-1
 territory) once residency lands, and the pre-hardware gate for every future
 RTL change.
 
-**Phase 5 — VERA816 conformance.** `tb_verafx`/`tb_pcm` with the full VERA
+**Phase 5 — full-VERA conformance.** `tb_verafx`/`tb_pcm` with the full VERA
 compile; add the 19-bit/`BASEX` widening cases and a sprite-fetch-above-128KB
 case. **Now the highest-value phase left**: AUDIT.md H-3 was a truncation on
 the renderer side of VRAM that no simulation covered, because every existing

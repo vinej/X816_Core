@@ -27,8 +27,14 @@ covers the VRAM-versus-VERA2 question and why the answer was a blitter.
 > were all real, were all fixed, and are now *moot* — at a stock 128 KB there
 > is nothing above 128 KB to reach or to alias onto. The blitter survived and
 > its contract moved to [BLIT816.md](BLIT816.md). §6.2's 4.47× measurement is
-> unaffected and is in fact the reason the VRAM went back to stock. See
-> [VERA816.md](VERA816.md).
+> unaffected and is in fact the reason the VRAM went back to stock.
+>
+> The 352 KB-era documents this audit cites — `VERA816.md`,
+> `VERA_MEMORY_REVIEW.md`, `BRAM_SWITCH.md` — were **removed on 2026-08-03**
+> so the doc tree describes only the machine that exists; every citation
+> below still resolves in git history. What replaced them:
+> [VERA2.md](VERA2.md) (the SDRAM bitmap layer that now carries high
+> resolution) and [MEMORY_MAP.md](MEMORY_MAP.md) §3 (what stock VRAM fits).
 >
 > **H-3's lesson outlived its bug** and is the one to carry forward: a silent
 > Verilog width truncation is invisible to every test that uses a different

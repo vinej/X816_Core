@@ -19,8 +19,8 @@
 // so a source read crossing a 128 KB boundary could report a false cache hit
 // and copy the wrong bytes.  At 17-bit addresses the widths match exactly.
 //
-// This is the only non-stock register bank left in VERA; see doc/VERA816.md
-// for the 352 KB extension that was removed at the same time.
+// This is the only non-stock register bank left in VERA; the 352 KB VERA816
+// extension removed alongside it lives in git history.
 //
 // Programming model (registers live in top.v's DCSEL=33 bank, $9F29-$9F2C):
 //   BLT_IDX  ($9F29 R/W)  index into the parameter file, 0-9

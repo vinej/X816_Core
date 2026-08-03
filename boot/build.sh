@@ -5,7 +5,7 @@
 #   sh build.sh sdramtest  -> sdramtest.s (any other .s in this directory)
 #
 # (There used to be a `vramtest` target here -- the VERA816 conformance test.
-# It went with VERA816 on 2026-08-02; see doc/VERA816.md.)
+# It went with the 352 KB VERA816 attempt, removed 2026-08-02; git history.)
 #
 # Either way the result lands in boot.hex, which is what boot_rom.sv reads
 # with $readmemh.  boot.hex is committed so a plain `quartus_sh --flow compile`

@@ -320,14 +320,14 @@ X16 register offsets port over unchanged; $9F80-$9F8F is X816's own.""",
 
 # ---- banks $01-$04 in BRAM --------------------------------------------------
 group(
-    "Fast program RAM (doc/BRAM_SWITCH.md)",
+    "Fast program RAM (doc/MEMORY_MAP.md 1)",
     """Banks $01-$04 are BRAM, always. That is where the HPS loader drops a
 program, so a program's CODE is single-cycle without anything being rebuilt --
 measured 4.47x against SDRAM on hardware, doc/AUDIT.md 6.2.
 
 There is no mode and no register: an earlier design made this block switchable
-with VERA and it could not be built (BRAM_SWITCH.md 9). VERA is a stock 128 KB
-instead, which is what pays for it.""",
+with VERA and it could not be built (three synthesis failures; the attempt's
+records live in git history). VERA is a stock 128 KB instead, which pays for it.""",
     [
         Const("X816_FAST_BASE", 0x010000, 6,
               "first byte of BRAM -- also X816_PROG_BASE, which is the point"),

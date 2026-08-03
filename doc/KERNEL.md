@@ -4,7 +4,7 @@ A small OS: a console prompt, a filesystem, and program loading. It is what the
 core comes up in when nothing else is loaded.
 
 Rows marked **planned** are not implemented. This is the spec, written before
-the code the way [VERA816.md](VERA816.md) was, so the emulator and the firmware
+the code, so the emulator and the firmware
 could be built against the same statement rather than against each other — and
 much of it is built now: §9 carries per-item status (console, SD and FAT32 are
 green on hardware) and §10 records what is built today.
@@ -547,7 +547,7 @@ machine before the kernel is trusted.
 
 ## 8. Conformance tests
 
-Same shape as [VERA816.md](VERA816.md) §8 and the toolchain tests: a green
+Same shape as the other conformance suites and the toolchain tests: a green
 screen means pass, one colour per failing test, and a result byte for a
 debugger. Both the emulator and the hardware must pass before anything is built
 on the kernel.

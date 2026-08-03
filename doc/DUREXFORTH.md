@@ -5,7 +5,7 @@ How to get a Forth prompt on X816, starting from
 `C:\quartus\projects\X16_durexforth`).
 
 **Planned. None of this is built.** Written before the code, as
-[VERA816.md](VERA816.md) and [KERNEL.md](KERNEL.md) were.
+[KERNEL.md](KERNEL.md) was.
 
 **It waits on the kernel.** Forth's whole value is the interactive prompt, and
 its platform hooks are almost entirely console I/O. Start this after

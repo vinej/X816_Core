@@ -176,9 +176,8 @@ DEMOS = [
     # for the prompt.
     #
     # 2026-08-02: SCANOUT / SCANFULL / SCAN4 / REGWIN used to ship here too.
-    # All four needed the 352 KB VERA816 configuration -- a 640x480 8bpp
-    # framebuffer is 307,200 bytes and does not fit in a stock 128 KB -- and
-    # were retired with it. See doc/VERA816.md.
+    # All four needed the removed 352 KB VERA816 attempt (git history); their
+    # job -- high resolution on a real screen -- is V2DEMO's now.
     ("BLITTEST.BIN", os.path.join(CALYPSI, "examples", "vera", "blittest.bin")),
     # VERA2, the SDRAM bitmap layer (doc/VERA2.md). 640x480 4bpp, judged BY EYE
     # -- there is no green verdict, the picture is the verdict. Needs the OSD

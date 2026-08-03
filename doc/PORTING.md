@@ -26,7 +26,7 @@ against them — port over unchanged.
 
 | Block | Files | Change |
 |---|---|---|
-| VERA (video, audio, SPI) | 24 | **stock**, plus one added file: the `blit816` fill/copy engine on a fifth VRAM arbiter port ([BLIT816.md](BLIT816.md)). A 352 KB / 19-bit widening lived here until 2026-08-02 ([VERA816.md](VERA816.md)) |
+| VERA (video, audio, SPI) | 24 | **stock**, plus one added file: the `blit816` fill/copy engine on a fifth VRAM arbiter port ([BLIT816.md](BLIT816.md)). A 352 KB / 19-bit widening lived here until 2026-08-02 and was removed (git history) |
 | IKAOPM (YM2151) | 11 | none |
 | VIA 6522, SMC, I²C, PS/2 bridge | 6 | `smc_x16.sv` — key-FIFO pop-race fix (silently ate keystrokes; found on hardware) + debug taps |
 | `sdram.v` (MiST byte controller) | 1 | none |
@@ -147,12 +147,12 @@ Each is a straight lift from `x16_mister` when wanted, in roughly this order:
 2. **RTC / NVRAM** — `rtc_x16.sv` + `nvram_backer.sv` (second I²C slave at
    `$6F`, backed by a mounted image).
 3. **Serial** — `x16_serial_card.sv` ×2 at `$9FE0`/`$9FE8`.
-4. **SDRAM bitmap layer ("VERA2")** — `bitmap_regs.sv` + `bitmap_engine.sv`,
-   a 1 MB planar framebuffer in SDRAM at word base `FB_BASE_WORD`. *Since
-   superseded: the VERA816 widening puts a 640×480 8bpp framebuffer in real
-   VRAM, so VERA2 stops being necessary ([VERA816.md](VERA816.md) §1); the
-   notes below are kept in case it is ever wanted anyway.*
-   **Two things must change before it can be ported:**
+4. **SDRAM bitmap layer ("VERA2")** — **PORTED, 2026-08-03.** See
+   [VERA2.md](VERA2.md): `rtl/vera2_engine.sv` + `rtl/vera2_regs.sv`, with
+   the framebuffer as ordinary CPU memory at `$E0:0000` rather than behind a
+   data port, a vsync-latched display base upstream lacks, and both depths
+   fitting the measured fetch budget. The two porting hazards flagged below
+   were both real and both handled differently than predicted:
    * `FB_BASE_WORD = 24'h800000` is a *word* base, which in the flat mapping
      is CPU address `$80:0000` — it would sit inside the flat space and
      corrupt it. Relocate it into the **unused upper lane** (`addr[24]=1`),

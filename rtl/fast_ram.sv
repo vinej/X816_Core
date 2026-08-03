@@ -43,7 +43,7 @@
 // 6192 LABs of 4191.  bank0_ram's header already had the answer -- "M10K has
 // two ports and the read port owns one" -- and the resolution was to stop
 // switching.  Banks $01-$04 are always BRAM now; VERA is always 128 KB.
-// doc/BRAM_SWITCH.md records how that was arrived at.
+// The switchable-design attempt that settled this lives in git history.
 //
 // *** NEGEDGE READ *** for the same reason bank0_ram does it: the M10K gets a
 // half-cycle head start, so rd_data reflects the address presented THIS cycle

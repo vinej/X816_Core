@@ -103,7 +103,7 @@ X816_TIMER_HZ       = 1000         ; so the unit is a millisecond
 X816_BOOT_BASE      = $FF00        ; boot ROM read overlay, bank $00
 X816_BOOT_SIZE      = $100         ; and it is exactly one page
 
-; ---- Fast program RAM (doc/BRAM_SWITCH.md)
+; ---- Fast program RAM (doc/MEMORY_MAP.md 1)
 X816_FAST_BASE  = $010000          ; first byte of BRAM -- also X816_PROG_BASE, which is the point
 X816_FAST_LAST  = $04FFFF          ; last byte, bank $04
 X816_FAST_SIZE  = $040000          ; 256 KB, four whole banks

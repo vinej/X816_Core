@@ -113,9 +113,11 @@ BRAM, and since every instruction byte is a memory access, ordinary code pays
 that on almost every fetch.
 
 **VERA dropped from 352 KB to a stock 128 KB to pay for it** — 224 M10K blocks
-moved from VRAM to program RAM. `doc/BRAM_SWITCH.md` records how that was
-decided, including the switchable design that was tried first and could not be
-built.
+moved from VRAM to program RAM. A design that made the block switchable
+between VERA and the CPU was tried first and could not be built (three
+synthesis failures; Quartus M10K inference rejects every packing a runtime
+mux needs), which is why there is no mode and no register: the allocation is
+permanent. The attempt's documents live in git history.
 
 The array is 32 bits wide with byte enables, not byte-wide: M10K is 10,240 bits
 and a byte-wide array uses only 8,192 of them, so 256 KB would have cost 260
@@ -334,11 +336,16 @@ clears it in ~0.8 ms against ~38 ms through the CPU data port
 ([BLIT816.md](BLIT816.md)) — which is what makes it usable at 8 MHz at all.
 Double-buffering it does not fit; page-flipping at 4bpp does.
 
-### Why high resolution is VERA2's job, not VRAM's
+### Why high resolution is VERA2's job — and VERA2 exists
 
-VRAM cannot simply be grown back. The M10K is spent (§4: 540/553 blocks, 13
-free) and a 352 KB VERA shipped here until 2026-08-02 before being traded for
-program RAM — see [VERA816.md](VERA816.md) for what that was and why it went.
+**[VERA2.md](VERA2.md) is built**: a 640×480 linear framebuffer (4bpp and
+8bpp, both measured to fit the fetch budget) scanned out of the `$E0:0000`
+SDRAM window and composited over VERA, with a vsync-latched display base for
+tear-free page flips.
+
+VRAM itself cannot simply be grown back: the M10K is spent (§4), and a 352 KB
+VERA shipped here until 2026-08-02 before being traded for program RAM (its
+documents live in git history).
 
 But **only part of a high-resolution mode actually needs to be VRAM.** Tilemap,
 tile and sprite fetches are random-access at ~160 scattered accesses per line;
@@ -360,21 +367,21 @@ from BRAM and no longer competes for SDRAM bandwidth.
 | `fast_ram` — banks `$01-$04` (256 KB) | 256 |
 | VERA VRAM (128 KB) | 128 |
 | `bank0_ram` (64 KB) | 64 |
+| VERA2 line buffer + palette | 2 |
 | `boot_rom` (256 B) | 1 |
 | ascal, line buffers, palette, sprite RAM, FIFOs | 91 |
-| **Total** | **540 / 553 (98%)** |
-| **Free** | **13** |
+| **Total** | **542 / 553 (98%)** |
+| **Free** | **11** |
 
 **Block RAM is the binding constraint, and timing is not.** That distinction
 matters for anything proposed next, so both numbers are here (build of
-2026-08-02, stock VERA + `blit816`):
+2026-08-03, stock VERA + `blit816` + VERA2):
 
 | | |
 |---|---|
-| M10K | **540 / 553 (98%)** — 13 free |
-| ALMs | 17,870 / 41,910 (43%) |
-| Worst slack, any corner | **+0.050 ns** — a *hold* check on the HDMI PLL |
-| Worst setup, X816's own clocks | **+1.338 ns** — the 100 MHz SDRAM domain |
+| M10K | **542 / 553 (98%)** — 11 free |
+| ALMs | 19,421 / 41,910 (46%) |
+| Worst slack, any corner | **+0.087 ns** — framework PLL clocking, as before |
 | Negative slack | **none** |
 
 Every tight path belongs to the MiSTer framework's PLL/HDMI clocking, not to

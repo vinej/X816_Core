@@ -7,8 +7,7 @@ left ambiguous here will diverge silently — which is exactly how this project
 lost weeks to AUDIT.md H-3 and H-4.
 
 **This is the only non-stock register bank in X816's VERA.** Everything else
-was returned to stock on 2026-08-02; see [VERA816.md](VERA816.md) for the
-352 KB extension that was removed and why. The blitter stayed because it does
+was returned to stock on 2026-08-02 (the 352 KB VERA816 attempt; its documents were removed on 2026-08-03 and live in git history). The blitter stayed because it does
 not depend on a larger VRAM and because it is worth roughly 50× on the one
 operation VERA makes expensive.
 

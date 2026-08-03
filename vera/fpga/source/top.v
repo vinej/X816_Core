@@ -133,7 +133,7 @@ module top(
     // clear of all of them, and everything here resets to 0 -- stock software
     // never selects DCSEL=33, so it cannot observe any of this.  The 352 KB
     // VERA816 extension that used to occupy DCSEL 32 and 34 was removed on
-    // 2026-08-02 when VRAM went back to 128 KB; see doc/VERA816.md.
+    // 2026-08-02 when VRAM went back to 128 KB (git history).
     localparam [7:0] BLIT816_BLT_ID = 8'hB6;
     reg  [3:0] blt_idx_r,                     blt_idx_next;
     wire [7:0] blt_data_rddata;
