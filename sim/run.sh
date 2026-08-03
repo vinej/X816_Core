@@ -11,6 +11,8 @@
 #                     # (simulates ~1M cpu cycles -- takes a few minutes)
 #   ./run.sh blit     # blit816 fill/copy engine (blit816 + vram_if + the
 #                     # real 128 KB main_ram; fill/copy/wrap/contention)
+#   ./run.sh vera2    # the VERA2 bitmap layer end to end: a CPU store at
+#                     # $E0:0000 comes out as the right pixel colour
 #   ./run.sh vfb      # the VERA2 framebuffer window in flat_sdram's address
 #                     # map: byte pairs share an SDRAM word, nothing else moved
 #   ./run.sh fastram  # banks $01-$04 in BRAM: byte lanes, neighbours,
@@ -66,11 +68,19 @@ vlog -quiet -sv ../vera/fpga/source/main_ram.v ../vera/fpga/source/vram_if.v \
 vlog -quiet -sv ../rtl/ms_timer.sv tb_ms_timer.v
 vlog -quiet -sv ../rtl/fast_ram.sv tb_fast_ram.v
 vlog -quiet -sv ../rtl/flat_sdram.sv sdram_sim.v tb_vfb.v
+vlog -quiet -sv ../rtl/vera2_engine.sv ../rtl/vera2_regs.sv ../rtl/flat_sdram.sv sdram_sim.v tb_vera2.v
 
 run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length
   local out
   out=$(vsim -c -gMODE=$1 -gIMAGE_HEX="$2" -gIMAGE_LEN=$3 -do "run -all; quit -f" tb_boot 2>&1) || true
   echo "$out" | grep -E "\[TB\]|PASS|FAIL|TRAP|Error" || echo "$out" | tail -20
+  echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
+}
+
+run_vera2 () {
+  local out
+  out=$(vsim -c -do "run -all; quit -f" tb_vera2 2>&1) || true
+  echo "$out" | grep -E "\[TB\]|PASS|FAIL|MISMATCH|Error" || echo "$out" | tail -20
   echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
 }
 
@@ -205,6 +215,7 @@ case "${1:-all}" in
   noboot)   run_boot 0 bootprobe.hex $PROBE_LEN ;;
   blit)     run_blit ;;
   timer)    run_timer ;;
+  vera2)    run_vera2 ;;
   vfb)      run_vfb ;;
   fastram)  run_fastram ;;
   lint)     run_lint ;;
@@ -218,8 +229,9 @@ case "${1:-all}" in
           echo "----- blit (VRAM blitter) -----";      run_blit
           echo "----- timer (ms counter) -----";       run_timer
           echo "----- vfb (framebuffer window) -----"; run_vfb
+          echo "----- vera2 (bitmap layer) -----";     run_vera2
           echo "----- fastram (banks $01-$04) -----";  run_fastram
           echo "----- noboot (bands fallback) -----";  run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  *)      echo "unknown target: $1 (boot | fw | noboot | blit | timer | vfb | fastram | lint | contract | calypsi | all)"
+  *)      echo "unknown target: $1 (boot | fw | noboot | blit | timer | vfb | vera2 | fastram | lint | contract | calypsi | all)"
           exit 1 ;;
 esac

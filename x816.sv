@@ -124,7 +124,12 @@ module emu
         // A plain "S" would mount from the OSD but forget it on the next boot.
         "SC0,IMG,Mount SD;",
         "-;",
-        "F1,BIN,Load Image;",       // ioctl index 1 -> flat memory, addr = file offset
+        "F1,BIN,Load Image;",
+        "-;",
+        // VERA2: the SDRAM bitmap layer (doc/VERA2.md). Master switch, default
+        // OFF -- with it off the core is bit-identical to stock VERA, and the
+        // $9F61 ID register reads $00 so software can feature-detect.
+        "O5,VERA2 Bitmap Layer,Off,On;",
         "-;",
         "J1,A,B,X,Y,L,R,Select,Start;",
         "V,v0.1"
@@ -330,6 +335,7 @@ module emu
     wire ym_cs     = dec_valid & io_page & (cpu_a[7:4] == 4'h4);   // $9F40-$9F4F
     wire sysctl_cs = dec_valid & io_page & (cpu_a[7:4] == 4'h8);   // $9F80-$9F8F
     wire timer_cs  = dec_valid & io_page & (cpu_a[7:4] == 4'h9) & (cpu_a[3:2] == 2'b00); // $9F90-$9F93
+    wire vera2_cs  = dec_valid & io_page & (cpu_a[7:4] == 4'h6);   // $9F60-$9F6F
 
     // Boot ROM overlay: READ-ONLY shadow of $00:FF00-$00:FFFF.  Writes fall
     // through to the RAM underneath so the stub can copy itself down before
@@ -514,13 +520,13 @@ module emu
         .ld_data    (sd_dma_wr ? sd_dma_data : ioctl_dout),
         .ld_busy    (sdram_ld_busy),
 
-        // Framebuffer stream -- idle until the VERA2 engine lands (stage C).
-        .fb_go      (1'b0),
-        .fb_base    (24'd0),
-        .fb_len     (11'd0),
-        .fb_valid   (),
-        .fb_word    (),
-        .fb_done    (),
+        // Framebuffer stream -- the VERA2 scanout engine's line fetch.
+        .fb_go      (v2_fb_go),
+        .fb_base    (v2_fb_base),
+        .fb_len     (v2_fb_len),
+        .fb_valid   (v2_fb_valid),
+        .fb_word    (v2_fb_word),
+        .fb_done    (v2_fb_done),
 
         .SDRAM_A    (SDRAM_A),
         .SDRAM_DQ   (SDRAM_DQ),
@@ -651,6 +657,94 @@ module emu
         .composite_luma  (),
         .composite_chroma()
     );
+
+    // ========================================================================
+    // VERA2 -- the SDRAM bitmap layer (doc/VERA2.md)
+    //
+    // 640x480 linear framebuffer scanned out of the $E0:0000 window in SDRAM
+    // and composited over VERA. VERA is untouched: it still owns the video
+    // TIMING (hsync/vsync/de), and the bitmap rides its raster.
+    //
+    // Off by default at both ends -- the OSD master switch AND the software
+    // enable bit must agree -- so a core with the switch off is bit-identical
+    // to stock.
+    // ========================================================================
+    // Declared before the instances that connect them: an undeclared name in a
+    // port connection becomes an implicit ONE-BIT wire, which would silently
+    // truncate fb_base from 24 bits to 1.
+    wire        v2_fb_go;
+    wire [23:0] v2_fb_base;
+    wire [10:0] v2_fb_len;
+    wire        v2_fb_valid;
+    wire [15:0] v2_fb_word;
+    wire        v2_fb_done;
+
+    wire       v2_enable, v2_passthru;
+    wire [1:0] v2_mode;
+    wire [19:0] v2_disp_base;
+    wire  [7:0] vera2_data;
+    wire        v2_pal_we;
+    wire  [7:0] v2_pal_idx;
+    wire [11:0] v2_pal_data;
+    wire  [3:0] v2_r, v2_g, v2_b;
+    wire        v2_active;
+    wire        v2_master = status[5];
+
+    vera2_regs u_vera2_regs (
+        .clk          (cpu_clk),
+        .reset_n      (cpu_reset_n),
+        .cs           (vera2_cs),
+        .rwn          (cpu_rwn),
+        .cpu_rdy      (cpu_rdy),
+        .addr         (cpu_a[3:0]),
+        .di           (cpu_do),
+        .do_o         (vera2_data),
+
+        .master_en    (v2_master),
+        .bmp_enable   (v2_enable),
+        .bmp_mode     (v2_mode),
+        .bmp_passthru (v2_passthru),
+        .disp_base    (v2_disp_base),
+
+        .pal_we       (v2_pal_we),
+        .pal_idx      (v2_pal_idx),
+        .pal_data     (v2_pal_data)
+    );
+
+    vera2_engine u_vera2 (
+        .pix_clk    (pix_clk),
+        .reset_n    (cpu_reset_n),
+        .enable     (v2_enable),
+        .mode       (v2_mode),
+        .de         (vera_de),
+        .vs         (vera_vs),
+        .disp_base  (v2_disp_base),
+        .bmp_r      (v2_r),
+        .bmp_g      (v2_g),
+        .bmp_b      (v2_b),
+        .bmp_active (v2_active),
+
+        .pal_clk    (cpu_clk),
+        .pal_we     (v2_pal_we),
+        .pal_idx    (v2_pal_idx),
+        .pal_data   (v2_pal_data),
+
+        .sdram_clk  (sdram_clk),
+        .fb_go      (v2_fb_go),
+        .fb_base    (v2_fb_base),
+        .fb_len     (v2_fb_len),
+        .fb_valid   (v2_fb_valid),
+        .fb_word    (v2_fb_word),
+        .fb_done    (v2_fb_done)
+    );
+
+    // Composition. The bitmap replaces VERA's pixel wherever it is active;
+    // with passthru set, VERA's OPAQUE pixels (sprites, the mouse pointer)
+    // come back over the top, which is what keeps a hardware cursor usable.
+    wire show_bmp = v2_active & ~(v2_passthru & vera_opaque);
+    wire [3:0] out_r = show_bmp ? v2_r : vera_r;
+    wire [3:0] out_g = show_bmp ? v2_g : vera_g;
+    wire [3:0] out_b = show_bmp ? v2_b : vera_b;
 
     // ========================================================================
     // IKAOPM (YM2151)
@@ -1025,6 +1119,7 @@ module emu
     // boot_sel FIRST: the overlay shadows the top page of bank-0 RAM on reads.
     assign cpu_di = boot_sel   ? boot_data     :
                     vera_cs    ? vera_extbus_d :
+                    vera2_cs   ? vera2_data    :
                     ym_cs      ? ym_rd_data    :
                     via1_cs    ? via1_data     :
                     via2_cs    ? via2_data     :
@@ -1041,9 +1136,9 @@ module emu
     assign CLK_VIDEO = pix_clk;
     assign CE_PIXEL  = 1'b1;
 
-    assign VGA_R       = {vera_r, vera_r};
-    assign VGA_G       = {vera_g, vera_g};
-    assign VGA_B       = {vera_b, vera_b};
+    assign VGA_R       = {out_r, out_r};
+    assign VGA_G       = {out_g, out_g};
+    assign VGA_B       = {out_b, out_b};
     assign VGA_HS      = vera_hs;
     assign VGA_VS      = vera_vs;
     assign VGA_DE      = vera_de;
@@ -1133,6 +1228,6 @@ module emu
     // been added. Anything that must SURVIVE synthesis has to reach a device
     // output, not a named wire.
     wire _unused_cpu = cpu_sync | cpu_i_flag | (|cpu_pc) | buttons[0]
-                     | forced_scandoubler | direct_video | (|status) | vera_opaque;
+                     | forced_scandoubler | direct_video | (|status);
 
 endmodule
