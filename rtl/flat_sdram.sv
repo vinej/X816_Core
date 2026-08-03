@@ -47,26 +47,36 @@
 //
 // so addr[23:0] is a WORD address and addr[24] picks the lane.  Consecutive
 // byte addresses therefore land in DIFFERENT WORDS, not in the two lanes of
-// one word.  This module drives `{1'b0, byte_addr}` -- lane 0 of word
-// byte_addr -- which is correct but has two consequences worth knowing:
+// one word.
 //
-//   * Every CPU byte consumes a whole 16-bit word and wastes the high half,
-//     so a 16 MB flat space needs a 32 MB (or larger) MiSTer SDRAM module.
-//     8 MB parts cannot back a flat '816 at all.
+// This module uses TWO mappings, chosen by address range -- see map_addr()
+// below for the arithmetic and the reasoning:
 //
-//   * The entire upper lane (addr[24]=1) is UNUSED -- 16 MB of the part sits
-//     free.  That is the collision-proof place to put anything else that
-//     wants SDRAM (e.g. a ported VERA2 bitmap framebuffer, whose stock
-//     FB_BASE_WORD of 24'h800000 would otherwise land on CPU address
-//     $80:0000 and corrupt it).
+//   * EVERYWHERE EXCEPT $E0-$EF: `{1'b0, byte_addr}` -- lane 0 of word
+//     byte_addr, exactly as the original proven build.  Every CPU byte
+//     consumes a whole 16-bit word and wastes the high half, so a 16 MB flat
+//     space needs a 32 MB (or larger) MiSTer SDRAM module.  8 MB parts cannot
+//     back a flat '816 at all.
 //
-// DO NOT try to use sd_dout16 for 16-bit fetch without changing this mapping:
-// under {1'b0, byte_addr} it returns byte A alongside byte A+0x1000000, which
-// are unrelated.  Moving the CPU's LSB into the lane bit --
+//   * BANKS $E0-$EF (the VERA2 framebuffer): two bytes per word, so the
+//     scanout engine can read two pixels per SDRAM access.  It has to -- at
+//     8 clocks (80 ns) per access a 32 us line affords only ~400 accesses and
+//     640x480 8bpp needs 640 bytes of them.
+//
+// Outside the window nothing changed, which is the point: the address path
+// every existing program takes is bit-identical to the build that was proven
+// on hardware.
+//
+// DO NOT try to use sd_dout16 for 16-bit CPU fetch outside the window: under
+// {1'b0, byte_addr} it returns byte A alongside byte A+0x1000000, which are
+// unrelated.  Moving the CPU's LSB into the lane bit GLOBALLY --
 //     acc_addr = {byte_addr[0], 1'b0, byte_addr[23:1]}
-// -- puts bytes 2N/2N+1 in the two lanes of word N, makes dout16 useful, and
-// drops the part requirement to exactly 16 MB.  The write path is already
-// lane-correct for either bt (sd_addr[12:11] -> sd_dqm, sdram.v line 174).
+// -- would put bytes 2N/2N+1 in the two lanes of word N, make dout16 useful
+// everywhere and drop the part requirement to exactly 16 MB.  That is a real
+// future option (a 16-bit fetch is worth cycles on every instruction), and
+// the window below is the same trick applied to one range first.  The write
+// path is already lane-correct for either bt (sd_addr[12:11] -> sd_dqm,
+// sdram.v line 174).
 //============================================================================
 module flat_sdram (
     // ---- CPU domain ----
@@ -126,6 +136,48 @@ module flat_sdram (
     // ---- fast-domain snapshot ----
     logic        sd_ce, sd_we_l, sd_refresh;
     logic [24:0] acc_addr;
+
+    // ======================================================================
+    // ADDRESS MAPPING -- one function, used by BOTH the CPU path and the
+    // loader path, so an image can be staged straight into the framebuffer.
+    //
+    // Everywhere except the VERA2 framebuffer window this is the original
+    // {1'b0, byte_addr}: lane 0 of word byte_addr, bit-identical to what the
+    // proven build did, so no existing access changes at all.
+    //
+    // THE WINDOW IS DIFFERENT ON PURPOSE.  Banks $E0-$EF hold the VERA2
+    // framebuffer (X816_VFB_BASE), and the scanout engine has to read it fast
+    // enough to keep up with the raster.  An sdram.v access is 8 clocks at
+    // 100 MHz = 80 ns, so a 32 us line affords ~400 accesses.  640x480 8bpp
+    // needs 640 bytes per line: one pixel per word would be 640 accesses and
+    // MISSES -- and no amount of prefetch depth fixes an average-rate
+    // deficit.  Packing two pixels into the two lanes of one word halves it
+    // to 320, which fits with room for the CPU and refresh.
+    //
+    //     FB byte $E0:0000 + k  ->  word {4'hE, 1'b0, k[19:1]}, lane k[0]
+    //
+    // so consecutive FB bytes are the two halves of one 16-bit word and
+    // sd_dout16 delivers {odd pixel, even pixel} -- low byte = even x, which
+    // is the layout bitmap_engine.sv already expects.
+    //
+    // NO COLLISION IS POSSIBLE.  Diverting bytes $E00000-$EFFFFF away from
+    // the plain mapping is exactly what frees lane 0 of words $E00000-$EFFFFF,
+    // and the window only ever lands in words $E00000-$E7FFFF.  Everything
+    // else still owns lane 0 of its own word and is untouched.
+    //
+    // The CPU therefore writes the framebuffer with ORDINARY STORES -- no
+    // ADDR/DATA port, and MVN block moves work on it at 7 cycles/byte. That
+    // is a better programming model than the upstream VERA2 this is derived
+    // from, which reaches its framebuffer only through a data port.
+    // ======================================================================
+    localparam logic [3:0] VFB_BANK_HI = 4'hE;   // X816_VFB_BASE >> 20
+
+    function automatic logic [24:0] map_addr(input logic [23:0] a);
+        map_addr = (a[23:20] == VFB_BANK_HI)
+                 ? {a[0], VFB_BANK_HI, 1'b0, a[19:1]}   // {lane, word}
+                 : {1'b0, a};
+    endfunction
+
     logic  [7:0] acc_wdata;
     wire   [7:0] sd_dout;
     wire  [15:0] sd_dout16;
@@ -298,7 +350,7 @@ module flat_sdram (
                     end else if (ldf_nonempty) begin
                         sd_ce      <= 1'b1;
                         sd_we_l    <= 1'b1;
-                        acc_addr   <= {1'b0, ldfifo[ldf_rd][31:8]};
+                        acc_addr   <= map_addr(ldfifo[ldf_rd][31:8]);
                         acc_wdata  <= ldfifo[ldf_rd][7:0];
                         ldf_rd     <= ldf_rd + 3'd1;
                         acc_is_ld  <= 1'b1;
@@ -308,7 +360,7 @@ module flat_sdram (
                         // snapshot the cpu-domain params (stable by construction)
                         sd_ce       <= 1'b1;
                         sd_we_l     <= lat_we;
-                        acc_addr    <= {1'b0, lat_addr};
+                        acc_addr    <= map_addr(lat_addr);
                         acc_wdata   <= lat_wdata;
                         acc_is_ld   <= 1'b0;
                         cyc         <= 4'd0;

@@ -43,10 +43,16 @@ KERN_DP         = $2000            ; the kernel's direct page; KENTER switches D
 KERN_STATE      = $2000            ; start of the kernel's bank-0 claim (KERNEL.md 3.1)
 KERN_STATE_END  = $2FFF            ; last byte of the claim
 
+; ---- VERA2 framebuffer
+X816_VFB_BASE = $E00000            ; first byte of the framebuffer region
+X816_VFB_LAST = $EFFFFF            ; last byte, inclusive -- one byte below X816_FW_BASE
+X816_VFB_SIZE = $100000            ; 1 MB
+X816_VFB_BANK = $E0                ; the bank map_addr() decodes on (VFB_BASE >> 16)
+
 ; ---- MEM_ALLOC arena
 X816_HEAP_TABLE  = $200000         ; one page of kernel bookkeeping, never handed out
 X816_HEAP_BASE   = $200100         ; first byte MEM_ALLOC may return
-X816_HEAP_END    = $EFFFFF         ; last byte of the arena, inclusive
+X816_HEAP_END    = $DFFFFF         ; last byte of the arena, inclusive -- stops below the VERA2 framebuffer
 X816_HEAP_GRAIN  = $100            ; allocations are rounded up, and start, on a page
 X816_HEAP_BLOCKS = 32              ; live allocations at once -- a fixed table, not a free list
 

@@ -54,9 +54,24 @@ module sdram (
     assign sd_clk  = 1'b0;
     assign sd_dqm  = 2'b00;
 
-    reg [15:0] wmem [0:8388607];   // 16-bit words, indexed by addr[22:0]
+    // 16 M 16-bit words, indexed by the FULL 24-bit word address.
+    //
+    // This was [0:8388607] indexed by addr[22:0] until 2026-08-03, which
+    // silently ALIASED every word above $7FFFFF onto a low one -- and the CPU
+    // maps byte N to word N, so every access above $7F:FFFF was affected,
+    // including the `fw` target's staging at $F0:0000 (word $F00000 -> word
+    // $700000). Nothing collided in practice, so the tests passed, but they
+    // were passing on a model that did not match rtl/sdram.v: that decomposes
+    // addr[23:0] into ba(2) + row(13) + col(9) = a genuine 24-bit word
+    // address, 16 M words on a 32 MB part.
+    //
+    // It stopped being harmless with the VERA2 framebuffer, whose window sits
+    // at word $E00000-$E7FFFF and would have aliased onto $600000 -- i.e. onto
+    // ordinary CPU memory, in the model only. A test for the window would then
+    // have been measuring the model's bug.
+    reg [15:0] wmem [0:16777215];  // 16-bit words, indexed by addr[23:0]
     integer i;
-    initial for (i = 0; i < 8388608; i = i + 1) wmem[i] = 16'hDDDD;
+    initial for (i = 0; i < 16777216; i = i + 1) wmem[i] = 16'hDDDD;
 
     reg        last_ce = 1'b0;
     reg  [3:0] q = 4'd0;
@@ -64,7 +79,7 @@ module sdram (
     reg  [7:0] d_l;
     reg        w_l;
 
-    wire [22:0] widx = a_l[22:0];   // word index
+    wire [23:0] widx = a_l[23:0];   // word index (full width -- see wmem)
 
     always @(posedge clk) begin
         last_ce <= ce;

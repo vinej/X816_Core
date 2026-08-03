@@ -11,6 +11,8 @@
 #                     # (simulates ~1M cpu cycles -- takes a few minutes)
 #   ./run.sh blit     # blit816 fill/copy engine (blit816 + vram_if + the
 #                     # real 128 KB main_ram; fill/copy/wrap/contention)
+#   ./run.sh vfb      # the VERA2 framebuffer window in flat_sdram's address
+#                     # map: byte pairs share an SDRAM word, nothing else moved
 #   ./run.sh fastram  # banks $01-$04 in BRAM: byte lanes, neighbours,
 #                     # the single-cycle read, and the loader crossing
 #   ./run.sh timer    # the $9F90 millisecond counter: rate, the read latch
@@ -63,11 +65,19 @@ vlog -quiet -sv ../vera/fpga/source/main_ram.v ../vera/fpga/source/vram_if.v \
      ../vera/fpga/source/blit816.v tb_blit816.v
 vlog -quiet -sv ../rtl/ms_timer.sv tb_ms_timer.v
 vlog -quiet -sv ../rtl/fast_ram.sv tb_fast_ram.v
+vlog -quiet -sv ../rtl/flat_sdram.sv sdram_sim.v tb_vfb.v
 
 run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length
   local out
   out=$(vsim -c -gMODE=$1 -gIMAGE_HEX="$2" -gIMAGE_LEN=$3 -do "run -all; quit -f" tb_boot 2>&1) || true
   echo "$out" | grep -E "\[TB\]|PASS|FAIL|TRAP|Error" || echo "$out" | tail -20
+  echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
+}
+
+run_vfb () {
+  local out
+  out=$(vsim -c -do "run -all; quit -f" tb_vfb 2>&1) || true
+  echo "$out" | grep -E "\[TB\]|PASS|FAIL|MISMATCH|Error" || echo "$out" | tail -20
   echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
 }
 
@@ -195,6 +205,7 @@ case "${1:-all}" in
   noboot)   run_boot 0 bootprobe.hex $PROBE_LEN ;;
   blit)     run_blit ;;
   timer)    run_timer ;;
+  vfb)      run_vfb ;;
   fastram)  run_fastram ;;
   lint)     run_lint ;;
   contract) run_contract ;;
@@ -206,8 +217,9 @@ case "${1:-all}" in
           echo "----- fw (kernel firmware) -----";     run_boot 2 fwprobe.hex   $FWPROBE_LEN
           echo "----- blit (VRAM blitter) -----";      run_blit
           echo "----- timer (ms counter) -----";       run_timer
+          echo "----- vfb (framebuffer window) -----"; run_vfb
           echo "----- fastram (banks $01-$04) -----";  run_fastram
           echo "----- noboot (bands fallback) -----";  run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  *)      echo "unknown target: $1 (boot | fw | noboot | blit | timer | fastram | lint | contract | calypsi | all)"
+  *)      echo "unknown target: $1 (boot | fw | noboot | blit | timer | vfb | fastram | lint | contract | calypsi | all)"
           exit 1 ;;
 esac

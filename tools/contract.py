@@ -185,21 +185,51 @@ program object cannot land on the kernel's direct page.""",
         Const("KERN_STATE_END", 0x2FFF, 4, "last byte of the claim"),
     ])
 
+# ---- the VERA2 framebuffer --------------------------------------------------
+group(
+    "VERA2 framebuffer",
+    """The 1 MB of flat SDRAM the VERA2 bitmap layer scans out, doc/VERA2.md.
+It sits directly below the firmware so the arena stays one contiguous run, and
+it is reserved WHETHER OR NOT the layer is enabled -- a heap end that moved
+with an OSD switch could not be a single-sourced constant, and a program built
+against the larger arena would corrupt the framebuffer the moment somebody
+turned the layer on.
+
+It is ordinary CPU memory: the framebuffer is written with plain stores and
+MVN block moves, not through a data port. What makes that work is that
+flat_sdram.sv maps this range TWO BYTES PER SDRAM WORD instead of one, so the
+scanout engine reads two pixels per access -- 640x480 8bpp needs 320 accesses
+per line and a line only affords ~400. VFB_BASE is therefore not a free
+choice: its low 20 bits must be zero and map_addr() keys on bits [23:20].
+
+640x480 8bpp is 307,200 bytes, so 1 MB holds TWO of them -- double-buffering,
+which the upstream VERA2 this derives from could not do.""",
+    [
+        Const("X816_VFB_BASE", 0xE00000, 6,
+              "first byte of the framebuffer region"),
+        Const("X816_VFB_LAST", 0xEFFFFF, 6,
+              "last byte, inclusive -- one byte below X816_FW_BASE"),
+        Const("X816_VFB_SIZE", 0x100000, 6, "1 MB"),
+        Const("X816_VFB_BANK", 0xE0, 2,
+              "the bank map_addr() decodes on (VFB_BASE >> 16)"),
+    ])
+
 # ---- the kernel heap --------------------------------------------------------
 group(
     "MEM_ALLOC arena",
     """The flat SDRAM the kernel hands out, doc/KERNEL.md 5.5. It starts at
 bank $20 because everything below is already claimed by somebody: bank $00 is
 BRAM, $01-$0F is the program image (x816-lib.scm's Code region), and
-$10-$1F is FarRAM and the EXEC staging area. It stops below $F0 because that
-is the write-protected firmware. Nothing here is a preference -- if the
-linker maps and this arena ever disagreed, a program's own `far` data and a
-kernel allocation would be the same bytes, which is silent.""",
+$10-$1F is FarRAM and the EXEC staging area. It stops below $E0 because that
+is the VERA2 framebuffer, which is in turn below the write-protected firmware
+at $F0. Nothing here is a preference -- if the linker maps and this arena ever
+disagreed, a program's own `far` data and a kernel allocation would be the
+same bytes, which is silent.""",
     [
         Const("X816_HEAP_TABLE", 0x200000, 6,
               "one page of kernel bookkeeping, never handed out"),
         Const("X816_HEAP_BASE", 0x200100, 6, "first byte MEM_ALLOC may return"),
-        Const("X816_HEAP_END", 0xEFFFFF, 6, "last byte of the arena, inclusive"),
+        Const("X816_HEAP_END", 0xDFFFFF, 6, "last byte of the arena, inclusive -- stops below the VERA2 framebuffer"),
         Const("X816_HEAP_GRAIN", 0x100, 3,
               "allocations are rounded up, and start, on a page"),
         Const("X816_HEAP_BLOCKS", 32, 2,
