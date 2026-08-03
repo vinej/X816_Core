@@ -214,6 +214,32 @@ which the upstream VERA2 this derives from could not do.""",
               "the bank map_addr() decodes on (VFB_BASE >> 16)"),
     ])
 
+# ---- the VERA2 register block -----------------------------------------------
+group(
+    "VERA2 bitmap layer",
+    """The register block at $9F60-$9F6F, doc/VERA2.md 3. The framebuffer
+itself is not here -- it is plain memory at X816_VFB_BASE -- so this is only
+the control surface: mode, display base and palette.
+
+ID is the feature test and it is three-valued on purpose. $B5 means the layer
+is present and the OSD switch is on; $00 means the switch is off (or, on a
+machine without the layer at all, open bus happens to read otherwise). A
+program must check for $B5 and say so when it does not find it, rather than
+silently drawing nothing.""",
+    [
+        Const("X816_VERA2_BASE", 0x9F60, 4, "CTRL; the block runs to $9F6F"),
+        Const("X816_VERA2_ID", 0x9F61, 4, "reads X816_VERA2_ID_VALUE"),
+        Const("X816_VERA2_ID_VALUE", 0xB5, 2, "feature-detect signature"),
+        Const("X816_VERA2_DISPL", 0x9F62, 4, "display base [7:0]; bit 0 reads 0"),
+        Const("X816_VERA2_DISPM", 0x9F63, 4, "display base [15:8]"),
+        Const("X816_VERA2_DISPH", 0x9F64, 4, "display base [19:16]"),
+        Const("X816_VERA2_PALADR", 0x9F66, 4, "palette index, auto-increments"),
+        Const("X816_VERA2_PALLO", 0x9F67, 4, "{G,B} latched"),
+        Const("X816_VERA2_PALHI", 0x9F68, 4, "{-,R}; commits the entry, idx++"),
+        Const("X816_VERA2_MODE_8BPP", 1, 2, "CTRL[2:1] -- tears until CYCLE_LEN", base=10),
+        Const("X816_VERA2_MODE_4BPP", 2, 2, "CTRL[2:1] -- the usable mode", base=10),
+    ])
+
 # ---- the kernel heap --------------------------------------------------------
 group(
     "MEM_ALLOC arena",

@@ -91,6 +91,12 @@ TRY:
   RUN KEYSCAN.BIN       WHAT EVERY KEY SENDS -> /KEYMAP.TXT
   RUN BLITTEST.BIN      VERA BLITTER FILL/COPY -- GREEN IS PASS
                         (NO ESC: RESET FOR THE PROMPT)
+  RUN V2DEMO.BIN        VERA2 640X480 4BPP. NEEDS THE OSD "VERA2 BITMAP
+                        LAYER" SWITCH SET TO ON. EXPECT 16 VERTICAL COLOUR
+                        BANDS, A WHITE BAR TOP, A BLUE BAR BOTTOM, AND A
+                        STRAIGHT DIAGONAL. A BENT OR REPEATING PICTURE MEANS
+                        THE LINE STRIDE IS WRONG. NOTHING HAPPENING MEANS THE
+                        OSD SWITCH IS STILL OFF. (NO ESC: RESET)
   RUN FXTEST.BIN        VERA FX AFFINE -- PRINTS CYCLES PER PIXEL
 
 ESC RETURNS TO THE SHELL FROM ANY OF THESE.
@@ -174,6 +180,12 @@ DEMOS = [
     # framebuffer is 307,200 bytes and does not fit in a stock 128 KB -- and
     # were retired with it. See doc/VERA816.md.
     ("BLITTEST.BIN", os.path.join(CALYPSI, "examples", "vera", "blittest.bin")),
+    # VERA2, the SDRAM bitmap layer (doc/VERA2.md). 640x480 4bpp, judged BY EYE
+    # -- there is no green verdict, the picture is the verdict. Needs the OSD
+    # "VERA2 Bitmap Layer" switch On; with it Off the program detects $9F61 =
+    # $00 and leaves VERA's screen alone rather than going black, which is
+    # feature detection working and not a failure.
+    ("V2DEMO.BIN",  os.path.join(CALYPSI, "examples", "vera", "v2demo.bin")),
     # FX affine: six correctness checks against a C reference, then it PRINTS
     # the measured cycles per pixel -- worth taking on real hardware where the
     # CPU timing is the real one rather than the emulator's model of it.

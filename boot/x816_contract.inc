@@ -49,6 +49,19 @@ X816_VFB_LAST = $EFFFFF            ; last byte, inclusive -- one byte below X816
 X816_VFB_SIZE = $100000            ; 1 MB
 X816_VFB_BANK = $E0                ; the bank map_addr() decodes on (VFB_BASE >> 16)
 
+; ---- VERA2 bitmap layer
+X816_VERA2_BASE      = $9F60       ; CTRL; the block runs to $9F6F
+X816_VERA2_ID        = $9F61       ; reads X816_VERA2_ID_VALUE
+X816_VERA2_ID_VALUE  = $B5         ; feature-detect signature
+X816_VERA2_DISPL     = $9F62       ; display base [7:0]; bit 0 reads 0
+X816_VERA2_DISPM     = $9F63       ; display base [15:8]
+X816_VERA2_DISPH     = $9F64       ; display base [19:16]
+X816_VERA2_PALADR    = $9F66       ; palette index, auto-increments
+X816_VERA2_PALLO     = $9F67       ; {G,B} latched
+X816_VERA2_PALHI     = $9F68       ; {-,R}; commits the entry, idx++
+X816_VERA2_MODE_8BPP = 1           ; CTRL[2:1] -- tears until CYCLE_LEN
+X816_VERA2_MODE_4BPP = 2           ; CTRL[2:1] -- the usable mode
+
 ; ---- MEM_ALLOC arena
 X816_HEAP_TABLE  = $200000         ; one page of kernel bookkeeping, never handed out
 X816_HEAP_BASE   = $200100         ; first byte MEM_ALLOC may return
