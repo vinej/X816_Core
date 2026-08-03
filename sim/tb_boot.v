@@ -199,6 +199,14 @@ module tb_boot #(
         .ld_data    (ld_data),
         .ld_busy    (ld_busy),
 
+        // Framebuffer stream -- idle until the VERA2 engine lands (stage C).
+        .fb_go      (1'b0),
+        .fb_base    (24'd0),
+        .fb_len     (11'd0),
+        .fb_valid   (),
+        .fb_word    (),
+        .fb_done    (),
+
         .SDRAM_A    (sd_pin_a),
         .SDRAM_DQ   (sd_pin_dq),
         .SDRAM_BA   (sd_pin_ba),

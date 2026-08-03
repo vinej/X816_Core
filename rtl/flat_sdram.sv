@@ -59,9 +59,9 @@
 //     back a flat '816 at all.
 //
 //   * BANKS $E0-$EF (the VERA2 framebuffer): two bytes per word, so the
-//     scanout engine can read two pixels per SDRAM access.  It has to -- at
-//     8 clocks (80 ns) per access a 32 us line affords only ~400 accesses and
-//     640x480 8bpp needs 640 bytes of them.
+//     scanout engine reads two pixels per SDRAM access instead of one.  That
+//     halves the line fetch; see the measured budget at fb_active below for
+//     what it does and does not buy.
 //
 // Outside the window nothing changed, which is the point: the address path
 // every existing program takes is bit-identical to the build that was proven
@@ -97,6 +97,28 @@ module flat_sdram (
     input  logic [23:0] ld_addr,
     input  logic  [7:0] ld_data,
     output logic        ld_busy,
+
+    // ---- Framebuffer read stream (sdram_clk domain) --------------------
+    // The VERA2 scanout engine's line fetch.  fb_go starts a run of fb_len
+    // 16-bit WORDS from word fb_base; each completed word pulses fb_valid
+    // with fb_word, and fb_done pulses when the run ends.  Words, not bytes:
+    // the framebuffer window packs two pixels per word (see map_addr), which
+    // is the whole reason the fetch keeps up.
+    //
+    // LOWEST PRIORITY, and deliberately so.  It is served only when the CPU
+    // has nothing pending, which bounds CPU stall to a single access (9
+    // clocks) instead of letting a 320-word line fetch block it for ~29 us.
+    // The cost is that a CPU hammering SDRAM can starve the fetch and glitch
+    // a line -- see the budget in the FB arbitration comment below.
+    //
+    // fb_go is ignored while a run is in flight; the engine waits for fb_done
+    // before asking for the next line.
+    input  logic        fb_go,
+    input  logic [23:0] fb_base,
+    input  logic [10:0] fb_len,
+    output logic        fb_valid,
+    output logic [15:0] fb_word,
+    output logic        fb_done,
 
     // ---- SDRAM chip pins ----
     output logic [12:0] SDRAM_A,
@@ -305,6 +327,41 @@ module flat_sdram (
     logic  [1:0] req_s;
     logic        req_d, req_pending;
     logic        acc_is_ld;
+    logic        acc_is_fb;
+
+    // ---- framebuffer line-fetch state ----
+    //
+    // THE BUDGET, and it is MEASURED, not estimated -- sim/run.sh vfb T9 times
+    // a real 320-word fetch through this FSM and prints the result.
+    //
+    // A line at 640x480/60 is 800 pixels / 25 MHz = 32 us = 3200 sdram_clk.
+    // Measured cost: 3577 clocks for 320 words = 11.1 clocks/word (one clock
+    // to issue in S_IDLE plus CYCLE_LEN+1 = 10 in S_ACC).  So:
+    //
+    //   640x480 4bpp : 320 bytes/line = 160 words = ~1790 clocks.  FITS, with
+    //                  the CPU still getting well over half the slots.
+    //   640x480 8bpp : 640 bytes/line = 320 words = ~3577 clocks against 3200.
+    //                  DOES NOT FIT -- and it is 12% short, so it cannot be
+    //                  recovered by prefetching deeper: the deficit is in the
+    //                  average rate, not in the latency.
+    //
+    // Two levers exist for 8bpp, neither taken here because each deserves its
+    // own change and its own test:
+    //
+    //   1. CYCLE_LEN.  It is 9 ("> sdram.v's 8-state cycle"), i.e. deliberately
+    //      conservative.  sdram.v finishes 8 clocks after ce, so CYCLE_LEN=7
+    //      would give 9 clocks/word -> 2880 for a line, which fits with ~35
+    //      accesses to spare.  That also makes EVERY CPU access to SDRAM 18%
+    //      faster, so it is worth doing on its own merits -- but it tightens
+    //      the envelope on the module with three silicon-bug-derived
+    //      invariants, so it wants its own hardware round trip.
+    //   2. sdram.v's BURST_LENGTH, currently 3'b000 (single access).  A burst
+    //      read would fetch a line in a fraction of the slots and end the
+    //      question, at the cost of changing the controller every access goes
+    //      through.
+    logic        fb_active;
+    logic [23:0] fb_ptr;
+    logic [10:0] fb_left;
 
     logic [31:0] ldfifo [0:7];                 // {ld_addr[23:0], ld_data[7:0]}
     logic  [2:0] ldf_rd, ldf_wr;
@@ -322,9 +379,23 @@ module flat_sdram (
             req_s <= 2'b00; req_d <= 1'b0; req_pending <= 1'b0; ack_tgl <= 1'b0;
             acc_addr <= 25'h0; acc_wdata <= 8'h0; acc_is_ld <= 1'b0;
             ldf_rd <= 3'd0; ldf_wr <= 3'd0; ldf_cnt <= 4'd0;
+            acc_is_fb <= 1'b0; fb_active <= 1'b0; fb_ptr <= 24'h0;
+            fb_left <= 11'd0; fb_valid <= 1'b0; fb_word <= 16'h0;
+            fb_done <= 1'b0;
         end else begin
             sd_ce      <= 1'b0;   // ce/refresh are single-cycle triggers
             sd_refresh <= 1'b0;
+            fb_valid   <= 1'b0;   // fb_valid/fb_done are single-cycle pulses
+            fb_done    <= 1'b0;
+
+            // A run is armed here and drained by the arbiter below. fb_go is
+            // ignored mid-run: the engine waits for fb_done, and a zero-length
+            // run is a no-op rather than a 2048-word wrap.
+            if (fb_go && !fb_active && (fb_len != 11'd0)) begin
+                fb_active <= 1'b1;
+                fb_ptr    <= fb_base;
+                fb_left   <= fb_len;
+            end
 
             req_s <= {req_s[0], req_tgl};
             req_d <= req_s[1];
@@ -354,6 +425,7 @@ module flat_sdram (
                         acc_wdata  <= ldfifo[ldf_rd][7:0];
                         ldf_rd     <= ldf_rd + 3'd1;
                         acc_is_ld  <= 1'b1;
+                        acc_is_fb  <= 1'b0;
                         cyc        <= 4'd0;
                         state      <= S_ACC;
                     end else if (req_pending) begin
@@ -363,18 +435,42 @@ module flat_sdram (
                         acc_addr    <= map_addr(lat_addr);
                         acc_wdata   <= lat_wdata;
                         acc_is_ld   <= 1'b0;
+                        acc_is_fb   <= 1'b0;
                         cyc         <= 4'd0;
                         req_pending <= 1'b0;
                         state       <= S_ACC;
+                    end else if (fb_active) begin
+                        // Framebuffer line fetch -- LAST, so the CPU never
+                        // waits more than one access for it. fb_ptr is already
+                        // a WORD index (the engine works in words), so it goes
+                        // to sdram.v unmapped; the lane bit is irrelevant
+                        // because the whole 16-bit word is taken from dout16.
+                        sd_ce     <= 1'b1;
+                        sd_we_l   <= 1'b0;
+                        acc_addr  <= {1'b0, fb_ptr};
+                        acc_is_ld <= 1'b0;
+                        acc_is_fb <= 1'b1;
+                        cyc       <= 4'd0;
+                        state     <= S_ACC;
                     end
                 end
                 S_ACC: begin
                     cyc <= cyc + 4'd1;
                     if (cyc == CYCLE_LEN) begin
-                        if (!acc_is_ld) begin
+                        if (acc_is_fb) begin
+                            fb_word  <= sd_dout16;   // {odd pixel, even pixel}
+                            fb_valid <= 1'b1;
+                            fb_ptr   <= fb_ptr + 24'd1;
+                            fb_left  <= fb_left - 11'd1;
+                            if (fb_left == 11'd1) begin
+                                fb_active <= 1'b0;
+                                fb_done   <= 1'b1;
+                            end
+                        end else if (!acc_is_ld) begin
                             rd_data_f <= sd_dout;
                             ack_tgl   <= ~ack_tgl;   // completion -> CPU domain
                         end
+                        acc_is_fb <= 1'b0;
                         state <= S_IDLE;
                     end
                 end

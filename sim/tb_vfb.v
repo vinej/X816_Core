@@ -53,12 +53,29 @@ module tb_vfb;
     wire        SDRAM_nCS, SDRAM_nWE, SDRAM_nRAS, SDRAM_nCAS;
     wire        SDRAM_CKE, SDRAM_CLK, SDRAM_DQML, SDRAM_DQMH;
 
+    // ---- framebuffer stream port ----
+    // DECLARED BEFORE THE INSTANCE ON PURPOSE. An undeclared name in a port
+    // connection becomes an implicit ONE-BIT wire, so with these below the
+    // instantiation fb_base would have been silently truncated from 24 bits
+    // to 1 -- the same family of silent Verilog truncation that sim/run.sh
+    // lint exists for. Here it happened to collide with the later explicit
+    // declaration and errored out; without that collision it would have been
+    // a testbench quietly measuring the wrong thing.
+    reg         fb_go = 0;
+    reg  [23:0] fb_base = 0;
+    reg  [10:0] fb_len = 0;
+    wire        fb_valid;
+    wire [15:0] fb_word;
+    wire        fb_done;
+
     flat_sdram dut (
         .clk(clk), .reset_n(reset_n),
         .cs(cs), .we(we), .byte_addr(byte_addr),
         .wr_data(wr_data), .rd_data(rd_data), .ready(ready),
         .sdram_clk(sdram_clk),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data), .ld_busy(ld_busy),
+        .fb_go(fb_go), .fb_base(fb_base), .fb_len(fb_len),
+        .fb_valid(fb_valid), .fb_word(fb_word), .fb_done(fb_done),
         .SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ), .SDRAM_BA(SDRAM_BA),
         .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
         .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS),
@@ -137,7 +154,36 @@ module tb_vfb;
     endtask
 
     reg [7:0] got;
+    reg [7:0] want_lo, want_hi;
     integer k;
+
+    // Stream capture + a clock counter, so the fetch RATE is measured rather
+    // than asserted. This is the number that decides whether a mode is usable:
+    // a 640x480/60 line is 3200 sdram_clk, and 8bpp needs 320 words of it.
+    reg [15:0] fb_seen [0:1023];
+    integer    fb_n = 0;
+    integer    fb_clocks = 0;
+    reg        fb_timing = 0;
+    always @(posedge sdram_clk) begin
+        if (fb_timing) fb_clocks = fb_clocks + 1;
+        if (fb_valid) begin
+            fb_seen[fb_n] = fb_word;
+            fb_n = fb_n + 1;
+        end
+    end
+
+    task fb_run(input [23:0] base, input [10:0] len);
+        begin
+            fb_n = 0; fb_clocks = 0;
+            @(negedge sdram_clk);
+            fb_base = base; fb_len = len; fb_go = 1; fb_timing = 1;
+            @(negedge sdram_clk);
+            fb_go = 0;
+            @(posedge fb_done);
+            @(posedge sdram_clk);   // the last fb_valid rides with fb_done
+            fb_timing = 0;
+        end
+    endtask
 
     initial begin
         repeat (20) @(posedge clk);
@@ -230,9 +276,70 @@ module tb_vfb;
         expect_word(24'hE08000, 16'h3D3C, "ld-fb-pair");
         expect_word(24'h300000, 16'hDD9E, "ld-outside");
 
+        // ------------------------------------------------------------------
+        // T7: the framebuffer read stream returns the right words, in order.
+        // Seed a run of pixel pairs through the CPU port (the ordinary-store
+        // path a program would use), then stream them back as the engine will.
+        // ------------------------------------------------------------------
+        $display("[TB] T7 fb stream: content and order");
+        for (k = 0; k < 64; k = k + 1) begin
+            cpu_write(24'hE20000 + k[23:0], (k * 7 + 3) & 8'hFF);
+        end
+        settle;
+        // 64 bytes = 32 words, starting at word $E10000 ($E20000 >> 1).
+        fb_run(24'hE10000, 11'd32);
+        if (fb_n != 32) begin
+            errors = errors + 1;
+            $display("[TB] MISMATCH fb-count            got %0d words, want 32", fb_n);
+        end
+        for (k = 0; k < 32; k = k + 1) begin
+            // Build the halves as 8-bit regs first: concatenating raw integers
+            // makes 32-bit operands and the compare is then never equal.
+            want_lo = ((2*k)   * 7 + 3) & 8'hFF;   // even x -> low byte
+            want_hi = ((2*k+1) * 7 + 3) & 8'hFF;   // odd  x -> high byte
+            if (fb_seen[k] !== {want_hi, want_lo}) begin
+                errors = errors + 1;
+                if (errors < 20)
+                    $display("[TB] MISMATCH fb-word[%0d]        got %04x, want %04x",
+                             k, fb_seen[k], {want_hi, want_lo});
+            end
+        end
+
+        // ------------------------------------------------------------------
+        // T8: LEN=0 starts nothing, and fb_go mid-run is ignored.
+        // ------------------------------------------------------------------
+        $display("[TB] T8 fb stream: len=0 is a no-op");
+        repeat (20) @(posedge sdram_clk);
+        fb_n = 0;
+        @(negedge sdram_clk); fb_base = 24'hE10000; fb_len = 11'd0; fb_go = 1;
+        @(negedge sdram_clk); fb_go = 0;
+        repeat (200) @(posedge sdram_clk);
+        if (fb_n != 0) begin
+            errors = errors + 1;
+            $display("[TB] MISMATCH fb-len0             %0d words emitted, want 0", fb_n);
+        end
+
+        // ------------------------------------------------------------------
+        // T9: THE RATE. Measure a full 8bpp line fetch (320 words) with the
+        // CPU idle, and compare against the 3200 sdram_clk a 640x480/60 line
+        // actually lasts. This is reported whatever the outcome -- the point
+        // is to have the number, not to assert a guess.
+        // ------------------------------------------------------------------
+        $display("[TB] T9 fb stream: measured line-fetch rate");
+        fb_run(24'hE10000, 11'd320);
+        $display("[TB] 320-word line fetch (8bpp, CPU idle): %0d sdram_clk, %0d.%0d clk/word",
+                 fb_clocks, fb_clocks/320, ((fb_clocks*10)/320) % 10);
+        $display("[TB] a 640x480/60 line is 3200 sdram_clk -> 8bpp %s, 4bpp (160 words) %s",
+                 (fb_clocks <= 3200) ? "FITS" : "DOES NOT FIT",
+                 (fb_clocks/2 <= 3200) ? "FITS" : "DOES NOT FIT");
+        if (fb_n != 320) begin
+            errors = errors + 1;
+            $display("[TB] MISMATCH fb-line-count       got %0d words, want 320", fb_n);
+        end
+
         if (errors == 0) begin
-            $display("[TB] all 6 tests clean");
-            $display("*** PASS *** vfb window: pairs share a word, outside unchanged");
+            $display("[TB] all 9 tests clean");
+            $display("*** PASS *** vfb: window packs pairs, outside unchanged, stream ordered");
         end else begin
             $display("[TB] %0d mismatches", errors);
             $display("*** FAIL: framebuffer window mapping ***");

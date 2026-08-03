@@ -514,6 +514,14 @@ module emu
         .ld_data    (sd_dma_wr ? sd_dma_data : ioctl_dout),
         .ld_busy    (sdram_ld_busy),
 
+        // Framebuffer stream -- idle until the VERA2 engine lands (stage C).
+        .fb_go      (1'b0),
+        .fb_base    (24'd0),
+        .fb_len     (11'd0),
+        .fb_valid   (),
+        .fb_word    (),
+        .fb_done    (),
+
         .SDRAM_A    (SDRAM_A),
         .SDRAM_DQ   (SDRAM_DQ),
         .SDRAM_BA   (SDRAM_BA),
