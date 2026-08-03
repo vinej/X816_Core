@@ -269,22 +269,26 @@ here.
 
 ---
 
-## 3. VERA VRAM — separate address space
+## 3. VERA VRAM — 128 KB, separate address space
 
 Reachable only via `$9F20-$9F22` (address) + `$9F23`/`$9F24` (data). Not part of
-the CPU's 16 MB.
-
-### As built — 128 KB, 17-bit address
+the CPU's 16 MB. This is stock VERA v0.9: 131,072 bytes, a 17-bit byte address.
 
 | Range | Size | Contents |
 |---|---:|---|
-| `$00000-$1FFFF` | 131,072 B = 128 KB | tilemaps, tile data, sprite data, small bitmaps |
+| `$00000-$1F9BF` | 129,472 B | tilemaps, tile data, sprite data, bitmaps |
+| `$1F9C0-$1F9FF` | 64 B | PSG registers |
+| `$1FA00-$1FBFF` | 512 B | palette |
+| `$1FC00-$1FFFF` | 1,024 B | sprite attributes |
 
-This is VERA v0.9 as shipped.
+The last three are **windows, not storage set aside**: a write in that range
+updates both the register file and the VRAM underneath. That matters for
+bitmaps — any framebuffer reaching `$1F9C0` repaints the palette with its own
+pixels as it draws, and the picture simply comes up in the wrong colours, which
+looks nothing like an address bug. The largest clear run is therefore
+**129,472 bytes** (`$00000-$1F9BF`).
 
-**What actually fits.** VRAM is 131,072 bytes, and the PSG / palette /
-sprite-attribute windows occupy `$1F9C0-$1FFFF`, so the largest contiguous run
-is **129,472 bytes** (`$00000-$1F9BF`). Framebuffer sizes against that:
+### What fits
 
 | Mode | Bytes | Single | Double |
 |---|---:|:--:|:--:|
@@ -297,47 +301,35 @@ is **129,472 bytes** (`$00000-$1F9BF`). Framebuffer sizes against that:
 | 320×240 4bpp | 38,400 | ✅ | ✅ (76,800) |
 | 640×480 1bpp | 38,400 | ✅ | ✅ (76,800) |
 
-**No 640×480 mode above 2bpp fits — 4bpp included.** 153,600 bytes needs
-128 KB plus another 22,528, so it misses by more than the register windows
-could ever free. 352 KB is what made 640×480 4/8bpp possible, and it is gone;
-see [VERA816.md](VERA816.md).
+**No 640×480 mode above 2bpp fits — 4bpp included.** 4bpp is 153,600 bytes
+against 131,072 of VRAM: it misses by 22,528, so it is not a near-fit that some
+layout trick recovers. 640×240 8bpp is the same 153,600 and fails identically.
 
-**320×240 8bpp is the practical bitmap mode** at this size: 76,800 bytes leaves
-~52 KB for tiles and sprites, and `blit816` clears it in ~0.8 ms
-([BLIT816.md](BLIT816.md)). Double-buffering it does not fit; page-flipping at
-4bpp does.
+**320×240 8bpp is the practical bitmap mode.** 76,800 bytes leaves ~52 KB for
+tiles and sprites, and `blit816` clears it in ~0.8 ms against ~38 ms through the
+CPU data port ([BLIT816.md](BLIT816.md)) — which is what makes it usable at
+8 MHz at all. Double-buffering it does not fit; page-flipping at 4bpp does.
 
 **A second, independent limit applies to 640-wide 8bpp** regardless of memory:
 [layer_renderer.v:197](../vera/fpga/source/graphics/layer_renderer.v#L197)
 truncates the 8bpp/640-wide line address to 10 bits, wrapping after ~204 lines.
-Any 640-wide mode needs the line-address arithmetic checked as well as the byte
+Any 640-wide mode needs its line-address arithmetic checked as well as its byte
 count — fitting in memory is necessary, not sufficient.
 
-### Built, then withdrawn — 352 KB, 19-bit address
+### Why high resolution is VERA2's job, not VRAM's
 
-This layout **shipped between 2026-07 and 2026-08-02** and was then removed:
-the M10K it needed went to banks `$01-$04` instead (§1), which bought every
-program 2.5–3.9×. Recorded because it is the shape VERA2 has to beat.
+VRAM cannot simply be grown back. The M10K is spent (§4: 540/553 blocks, 13
+free) and a 352 KB VERA shipped here until 2026-08-02 before being traded for
+program RAM — see [VERA816.md](VERA816.md) for what that was and why it went.
 
-| Range | Size | Contents |
-|---|---:|---|
-| `$00000-$4AFFF` | 307,200 B = 300 KB | 640×480 8bpp framebuffer (layer 0) |
-| `$4B000-$57FFF` | 53,248 B = 52 KB | tilemaps, tile data, sprite data |
-| **populated** | **360,448 B = 352 KB** | |
-| `$58000-$7FFFF` | 163,840 B | unpopulated (19-bit space is 512 KB) |
-
-**640×480 is therefore not available today at any depth above 2bpp — 4bpp
-included.** 4bpp is 153,600 bytes against 131,072 of VRAM, so it misses by
-22,528; it is not a near-fit that some layout trick recovers. See the table
-above for what does fit, [VERA816.md](VERA816.md) for what was removed, and §1
-for what the memory bought instead.
-
-**The 52 KB is not a free choice.** Tilemap, tile and sprite fetches are
-random-access at ~160 scattered accesses per line; only the bitmap layer is
-sequential. That is why VERA's own hardware uses on-chip SPRAM
-([main_ram.v:110](../vera/fpga/source/main_ram.v#L110), the `SP256K` blocks) and
-why the X16's VERA2 had to be a line-prefetch streaming engine rather than a
-memory. Anything random-access must stay in BRAM.
+But **only part of a high-resolution mode actually needs to be VRAM.** Tilemap,
+tile and sprite fetches are random-access at ~160 scattered accesses per line;
+only a bitmap layer is sequential. That is why VERA's own hardware uses on-chip
+SPRAM, and why the X16's VERA2 could be a line-prefetch streaming engine out of
+SDRAM rather than a memory. **Anything random-access must stay in BRAM; a
+sequentially-scanned framebuffer need not.** That asymmetry is the whole case
+for VERA2, and it is stronger now than when it was first weighed: the CPU runs
+from BRAM and no longer competes for SDRAM bandwidth.
 
 ---
 
@@ -345,15 +337,15 @@ memory. Anything random-access must stay in BRAM.
 
 ### On-chip M10K — 553 blocks on the 5CSEBA6U23I7
 
-| Consumer | As built | (the withdrawn 352 KB VRAM build) |
-|---|---:|---:|
-| VERA VRAM | 128 | 352 |
-| `fast_ram` — banks `$01-$04` (256 KB) | 256 | — |
-| `bank0_ram` (64 KB) | 64 | 64 |
-| `boot_rom` (256 B) | 1 | 1 |
-| ascal, line buffers, palette, sprite RAM, FIFOs | 91 | 89 |
-| **Total** | **540 / 553 (98%)** | **506 / 553 (91%)** |
-| Free | **13** | 47 |
+| Consumer | Blocks |
+|---|---:|
+| `fast_ram` — banks `$01-$04` (256 KB) | 256 |
+| VERA VRAM (128 KB) | 128 |
+| `bank0_ram` (64 KB) | 64 |
+| `boot_rom` (256 B) | 1 |
+| ascal, line buffers, palette, sprite RAM, FIFOs | 91 |
+| **Total** | **540 / 553 (98%)** |
+| **Free** | **13** |
 
 **There is no meaningful headroom left.** The fitted design closes timing at
 **+0.072 ns** worst slack. Anything new that wants block RAM — VERA2's line
@@ -364,9 +356,9 @@ write enables) and M10K's ×4 mode uses 4 of 5 bits per word. Roughly 1 block
 per KB.
 
 For comparison the X16 core sits at **550/553 (99%)** — it had no BRAM left,
-which is exactly why VERA2 had to live in SDRAM. Dropping the 256 KB system ROM
-and 40 KB LowRAM is what made the headroom available here; it has now been
-spent on program RAM rather than on VRAM.
+which is exactly why its VERA2 had to live in SDRAM. Dropping the 256 KB system
+ROM and 40 KB LowRAM is what made headroom available here, and it has now been
+spent: on program RAM, which every binary benefits from without being rebuilt.
 
 ### SDRAM
 
