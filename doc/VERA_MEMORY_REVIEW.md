@@ -1,5 +1,26 @@
 # VERA memory review — 352 KB BRAM vs the VERA2 SDRAM layer, and what gaming actually needs
 
+> ## HISTORICAL — written when VRAM was 352 KB
+>
+> **This review analysed a configuration that no longer exists.** VERA went back
+> to a stock 128 KB on 2026-08-02 ([VERA816.md](VERA816.md)), so every capacity
+> claim below is about memory the core no longer has.
+>
+> **In particular §1.5 is now false.** It says the 352 KB re-partitions as two
+> 640×480 4bpp framebuffers and that double-buffering that mode needs no RTL.
+> At 128 KB **a single 640×480 4bpp framebuffer does not fit**: it is 153,600
+> bytes against 131,072 of VRAM. Nor does 640×240 8bpp, which is the same
+> 153,600. See [MEMORY_MAP.md](MEMORY_MAP.md) §3 for what does fit — the short
+> answer is 320×240 8bpp.
+>
+> **What survived the review is its conclusion**, option D: the blitter was
+> built, is green on hardware, and is the one part of this analysis still in the
+> core ([BLIT816.md](BLIT816.md)). The fill-rate arithmetic in §4 also stands,
+> and improved — fill rate is CPU-bound, so the 4.47× CPU is a 4.47× fill rate.
+>
+> Kept because the VERA2-versus-BRAM question is now live again, and this is the
+> record of how it was reasoned about the first time.
+
 Date: 2026-08-01. Question under review: was dropping VERA2 (the upstream
 SDRAM bitmap layer) in favour of the 352 KB VERA816 BRAM widening the right
 call — given that 640×480 4/8bpp software rendering may be too slow for

@@ -280,9 +280,38 @@ the CPU's 16 MB.
 |---|---:|---|
 | `$00000-$1FFFF` | 131,072 B = 128 KB | tilemaps, tile data, sprite data, small bitmaps |
 
-This is VERA v0.9 as shipped. It **cannot** do 640×480 8bpp: that needs 300 KB,
-and [layer_renderer.v:197](../vera/fpga/source/graphics/layer_renderer.v#L197)
+This is VERA v0.9 as shipped.
+
+**What actually fits.** VRAM is 131,072 bytes, and the PSG / palette /
+sprite-attribute windows occupy `$1F9C0-$1FFFF`, so the largest contiguous run
+is **129,472 bytes** (`$00000-$1F9BF`). Framebuffer sizes against that:
+
+| Mode | Bytes | Single | Double |
+|---|---:|:--:|:--:|
+| 640×480 8bpp | 307,200 | ❌ | ❌ |
+| 640×480 4bpp | 153,600 | ❌ | ❌ |
+| 640×240 8bpp | 153,600 | ❌ | ❌ |
+| 640×480 2bpp | 76,800 | ✅ | ❌ |
+| 640×240 4bpp | 76,800 | ✅ | ❌ |
+| **320×240 8bpp** | **76,800** | **✅** | ❌ |
+| 320×240 4bpp | 38,400 | ✅ | ✅ (76,800) |
+| 640×480 1bpp | 38,400 | ✅ | ✅ (76,800) |
+
+**No 640×480 mode above 2bpp fits — 4bpp included.** 153,600 bytes needs
+128 KB plus another 22,528, so it misses by more than the register windows
+could ever free. 352 KB is what made 640×480 4/8bpp possible, and it is gone;
+see [VERA816.md](VERA816.md).
+
+**320×240 8bpp is the practical bitmap mode** at this size: 76,800 bytes leaves
+~52 KB for tiles and sprites, and `blit816` clears it in ~0.8 ms
+([BLIT816.md](BLIT816.md)). Double-buffering it does not fit; page-flipping at
+4bpp does.
+
+**A second, independent limit applies to 640-wide 8bpp** regardless of memory:
+[layer_renderer.v:197](../vera/fpga/source/graphics/layer_renderer.v#L197)
 truncates the 8bpp/640-wide line address to 10 bits, wrapping after ~204 lines.
+Any 640-wide mode needs the line-address arithmetic checked as well as the byte
+count — fitting in memory is necessary, not sufficient.
 
 ### Built, then withdrawn — 352 KB, 19-bit address
 
@@ -297,9 +326,11 @@ program 2.5–3.9×. Recorded because it is the shape VERA2 has to beat.
 | **populated** | **360,448 B = 352 KB** | |
 | `$58000-$7FFFF` | 163,840 B | unpopulated (19-bit space is 512 KB) |
 
-**640×480 8bpp is therefore not available today.** See
-[VERA816.md](VERA816.md) for what was removed, and §1 for what the memory
-bought instead.
+**640×480 is therefore not available today at any depth above 2bpp — 4bpp
+included.** 4bpp is 153,600 bytes against 131,072 of VRAM, so it misses by
+22,528; it is not a near-fit that some layout trick recovers. See the table
+above for what does fit, [VERA816.md](VERA816.md) for what was removed, and §1
+for what the memory bought instead.
 
 **The 52 KB is not a free choice.** Tilemap, tile and sprite fetches are
 random-access at ~160 scattered accesses per line; only the bitmap layer is
