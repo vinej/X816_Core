@@ -5,12 +5,15 @@ How to get a Forth prompt on X816, starting from
 lives in `C:\quartus\projects\X816_DurexForth`** — a clone with history, cut
 loose on 2026-08-03.
 
-**Stage A BOOTS (2026-08-03).** `run-emu.sh` in the port repo is green with
-its negative control: the kernel shell `EXEC`s `FORTH.BIN` off a FAT32 card,
-`1 2 + .` answers `3 ok`, `xyzzy` answers `xyzzy?` — keystrokes via the real
-SMC path, output via `CON_PUTC`. Not yet run on hardware; no bitstream change
-is needed (the image + the existing kernel firmware are the whole test), so
-the board round is: put `FORTH.BIN` on the card, `run FORTH.BIN`.
+**Stage A is GREEN ON HARDWARE (2026-08-03).** Confirmed on a DE10-Nano:
+`run FORTH.BIN` from the kernel prompt brings up the REPL on the real
+keyboard and console. In the emulator, `run-emu.sh` is green with its
+negative control: the kernel shell `EXEC`s `FORTH.BIN` off a FAT32 card,
+`1 2 + .` answers `3 ok`, `xyzzy` answers `xyzzy?`. No bitstream change was
+needed — the image plus the existing kernel firmware are the whole feature.
+`FORTH.BIN` ships at the root of `boot0.img` (`tools/mksdcard.py`). The
+hardware run also confirms the real RTL handles `(dp),y` with `DBR=$01`
+correctly — the case the emulator got wrong below.
 
 Getting from "assembles" to "boots" found four bugs, each recorded in the
 port's `7f95e89`: the C64 split-stack indexing relied on 6502 zp,x *page*
