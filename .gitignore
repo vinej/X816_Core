@@ -69,3 +69,4 @@ boot/*.img
 # .o is regenerable, so it stays ignored too.
 boot/*.o
 boot/*.lst
+sim/v2work/
