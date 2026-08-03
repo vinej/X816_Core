@@ -365,9 +365,26 @@ from BRAM and no longer competes for SDRAM bandwidth.
 | **Total** | **540 / 553 (98%)** |
 | **Free** | **13** |
 
-**There is no meaningful headroom left.** The fitted design closes timing at
-**+0.072 ns** worst slack. Anything new that wants block RAM — VERA2's line
-buffers included — has to take it from something already here.
+**Block RAM is the binding constraint, and timing is not.** That distinction
+matters for anything proposed next, so both numbers are here (build of
+2026-08-02, stock VERA + `blit816`):
+
+| | |
+|---|---|
+| M10K | **540 / 553 (98%)** — 13 free |
+| ALMs | 17,870 / 41,910 (43%) |
+| Worst slack, any corner | **+0.050 ns** — a *hold* check on the HDMI PLL |
+| Worst setup, X816's own clocks | **+1.338 ns** — the 100 MHz SDRAM domain |
+| Negative slack | **none** |
+
+Every tight path belongs to the MiSTer framework's PLL/HDMI clocking, not to
+X816 logic. The CPU (8 MHz), VERA (25 MHz) and SDRAM (100 MHz) domains all
+close comfortably.
+
+So: **anything new that wants block RAM has to take it from something already
+here** — 13 blocks is nothing, and VERA2's line buffers are exactly that kind
+of consumer. But there is ALM room (57% free) and real timing margin, so the
+constraint on a new engine is memory and not speed.
 
 Packing runs ~80%: VERA's arrays are nibble-wide (required for VERA FX's 4-bit
 write enables) and M10K's ×4 mode uses 4 of 5 bits per word. Roughly 1 block
