@@ -781,10 +781,13 @@ it cost one test failure while writing `libfs.s`.
 | `system/x816kernel` | new — the 8-bit/16-bit crossing |
 | `storage/fileio` | rewritten on **handles**; the channel model is gone |
 | `storage/dir` | rewritten on `DIR_*`; the BASIC-listing parser is gone |
-| `core/sugar` | the `xm_fio_*` macros follow the handle model |
-| `ui/filepick` | its copy path — sixty lines of channel juggling became a read/write loop |
-| `input/input` | `key_get`/`key_wait` on `CON_GETKEY`/`CON_GETC` |
-| `video/screen` | `screen_puts` on `CON_PUTC` |
+| `core/sugar` | the `xm_fio_*` macros follow the handle model; `xm_fs_*` changed ARITY with the load redesign (the dead device argument is gone, so old call sites break loudly); `xm_dos_cmd`/`xm_dos_status`/`xm_fs_setname`/`xm_fs_prg_entry` reference things that no longer exist and fail on use |
+| `ui/filepick` | its copy path — sixty lines of channel juggling became a read/write loop; then (2026-08-03) `dos_*` ops through the converted dos, double-click timed in milliseconds over `clock_get_ms`, the charset switch removed, and one over-range branch relayed — the first full-gate assembly found both |
+| `input/input` | `key_get`/`key_wait` on `CON_GETKEY`/`CON_GETC`; joystick and mouse entries now **report absence** (nothing is wired to the core) instead of jumping into a ROM that is not there |
+| `video/screen` | rewritten 2026-08-03: text and cursor through `CON_*`; `screen_set_mode` is native and supports exactly `$00` (the console) and `$80` (320×240×8 bitmap on layer 1 at `SCREEN_BITMAP_BASE`, round-trips without a font reload); the tilemap address math reads **layer 0** — the console's layer, not the X16's; `screen_scode` is identity (CP437: the byte IS the glyph); `screen_color`/`screen_charset` are gone |
+| `storage/dos` | converted 2026-08-03 — see §11.6 |
+| `storage/bmx` | converted 2026-08-03 — see §11.6 |
+| `storage/load` | redesigned 2026-08-03 — see §11.6 |
 
 What a caller notices: no device numbers, no secondary addresses, no logical
 file numbers, no `CHKIN`/`CHKOUT`/`CLRCHN`, and no `READST` — status is per
@@ -800,18 +803,37 @@ real card and then has pyfatfs check what is on it;
 `examples/asm-lib/run-emu.sh` still passes, so the conversion did not disturb
 the rest of the tree.
 
-### 11.3 Not converted yet, and why
+### 11.3 The queue is empty; what remains is parked, loudly
 
-| Module | Blocked on |
+The three modules this section used to list — `dos`, `bmx`, `load` — were
+converted 2026-08-03 (§11.6), and with them the last KERNAL call site in any
+sourced module. **`const_kernal.asm` and `const_rom.asm` are no longer
+sourced by `x16.asm`**; the whole non-parked library assembles without either
+symbol table, which was this section's definition of done.
+
+What did not convert got **parked**: its `X16_USE_*` gate is an `!error`
+(`#error` on the Calypsi path) naming the replacement, so asking for it is an
+assembly failure with an explanation, never code that jumps into a missing
+ROM. Parked, and why:
+
+| Gate | Why, and what replaces it |
 |---|---|
-| `storage/load` | **No longer blocked** — this row said "`EXEC` is not implemented" and that stopped being true when `K_EXEC` landed (§10). What remains is the redesign it also names: `LOAD`/`SAVE` carry PRG headers, BASIC `SYS` stubs and VRAM loads through `LOAD`'s A register, none of which describe this machine. The X816 answer is `EXEC` plus flat addresses, so the module's interface changes rather than its innards — same shape as `fileio`, which is done. |
-| `storage/dos` | the DOS command channel: `"S:FILE"` strings sent to a drive. The native equivalents are `FS_DELETE`, `FS_RENAME`, `FS_MKDIR`, so the module's whole *interface* changes. |
-| `storage/bmx` | ~30 `CHRIN`/`READST` sites. Mechanical — `fio_getc` and `fio_read` are already there — but 942 lines, and it is a library either way (§2.3). |
+| `gfx/fb`, `gfx/graph` | X16 ROM graphics wrappers, queued for a retarget onto the library's own `bitmap*`/`shapes` (§6) |
+| `gfx/console` | the kernel console is the console — `CON_*`, `video/screen` |
+| `input/keyboard` | wrapped the KERNAL key buffer; `input/input` over `CON_GETKEY` is the successor |
+| `comms/i2c` | the SMC I²C bus is the kernel's (§2.3) |
+| `storage/iec` | no IEC bus |
+| `storage/bank`, `bankalloc` | `storage/mem` carries the intent (§11.4) |
+| `audio/rom` | wrapped the X16 audio ROM driver; `ym_write` and `audio/zsm` drive the chips directly. `audio/ym`'s ROM note/patch surface went with it |
+| `util/float` | wrapped the X16 BASIC ROM float package (`+jsrfar` into `BANK_BASIC` — a dependency the KERNAL-symbol counts missed, because it hid inside a macro); `util/double` and `util/fixed` are self-contained |
 
-`core/const_kernal.asm` is still sourced, so those three still assemble against
-the KERNAL symbols. Removing it is the last step, not the first: a build that
-had to choose between the two tables could not contain a module halfway
-between them.
+The `+jsrfar`/`+set_rambank`/`+set_rombank`/`+rom_call_fast`/`+basic_stub`
+macros are deleted outright: on this machine `$00`/`$01` are the C runtime's
+pseudo-registers, so a banking macro would not merely do nothing — it would
+corrupt the runtime two bytes at a time. `input/mouse` is the one park that
+stays callable: its entries **report absence** (position 0,0, no buttons,
+joystick absent), which is the X16 API's own word for hardware that is not
+there, so filepick and friends run keyboard-only instead of crashing.
 
 ### 11.5 `system/irq` and `system/clock` — done
 
@@ -864,16 +886,17 @@ Green in the emulator with a negative control: `run-libirq.sh`, shipped as
 `LIBIRQ.BIN`. §8 test 8 describes what it covers and why it is a third test
 rather than a repeat of the other two.
 
-**A trap found on the way, left in place and recorded.** `x16_code.s` derives
-`X16_USE_IRQ_ANY` from `X16_USE_IRQ` through a chain of `#ifdef A` →
-`B: .equ 1` → `#ifdef B` steps. The middle of that chain writes an *assembler*
-symbol and the next step tests a *preprocessor* macro, and the C preprocessor
-cannot see a `.equ` — so the chain stops after one link and `system/irq.s` is
-never included. Defining `X16_USE_IRQ` alone produces "undefined symbol:
-`irq_frames`", which is at least loud. `libirq.s` sets every gate explicitly
-and says why. Not fixed in the library because the same pattern gates a dozen
-other module groups and changing it is its own change with its own blast
-radius.
+**A trap found on the way, since FIXED at the converter (2026-08-03).**
+`x16_code.s` derives `X16_USE_IRQ_ANY` from `X16_USE_IRQ` through a chain of
+`#ifdef A` → define → `#ifdef B` steps, and `acme2calypsi.py` used to emit the
+middle of every such chain as an *assembler* `.equ`, which the C preprocessor
+cannot see — so the chain stopped after one link and `system/irq.s` was
+silently never included. The converter now emits every `X16_USE_*` symbol as
+a `#define` (they are never used as operands, so no assembler symbol is
+missed), and `libirq.s` was changed from setting every derived gate by hand to
+defining **only the umbrellas** — making that build the standing regression
+test: if the chain ever breaks again, it fails with "undefined symbol:
+`irq_frames`".
 
 ### 11.4 `storage/bank`, `bankalloc` and `mem` — done, by collapsing them
 
@@ -934,3 +957,65 @@ rather than against itself, and the negative control patches the *library* —
 it disables the copy-direction logic and requires test 5 to catch the smear.
 That control earned its keep immediately: the first version of it patched a
 file the C preprocessor never read, reported a pass, and proved nothing.
+
+### 11.6 `storage/dos`, `bmx` and `load` — done, and the queue with them
+
+**Converted 2026-08-03.** These were §11.3's whole list; each changed shape
+the way its intent demanded rather than keeping the KERNAL's.
+
+**`storage/dos`** kept its names and its `(address, length)` signatures — that
+is what filepick and the `+xm_dos_*` macros call — and lost the command
+channel: `dos_delete`/`mkdir`/`rmdir`/`chdir`/`rename` copy the name into a
+NUL-terminated buffer and call the same `kern_*` entries `fio_*` uses.
+`dos_cmd` and `dos_status` are **not defined at all** (there is no drive to
+send a string to), and the status convention is the kernel's: 0 or a `KERR_*`
+code, carry unchanged. An overlong name is refused up front with
+`KERR_BADARG`, and the refusal lands in `dos_code` so `dos_lasterr` does not
+answer for the previous command.
+
+**`storage/bmx`** had the most KERNAL calls in the tree and is now the
+demonstration that §2.3's "library by inspection" call was right: handles
+replaced channels, the 16-byte header is one counted read into memory,
+`fio_seek` replaced the byte-loop that drained the palette/pixel gap, and
+`READST` vanished because a short read IS the error, reported by the call that
+suffered it. `MACPTR`'s stream-to-a-fixed-port trick has no `fio_read`
+equivalent — the kernel delivers to ascending memory — so bulk pixels go
+through a 255-byte bounce buffer. One new trap, recorded in the module header:
+`fio_read`/`fio_write` answer their byte counts in `X16_P6`/`P7`, two of the
+registers the caller's VRAM address arrives in, so the target is captured into
+module state *before* the first kernel call.
+
+**`storage/load`** was redesigned, not translated (§11.3's old row said it
+would be): `fs_load`/`fs_save`/`fs_vload` move **raw whole files** — no PRG
+header written or skipped — with 24-bit destinations (`X16_P4` is the bank
+now, where `fs_load` used to take the secondary address; a file crossing a
+bank boundary keeps loading into the next one). `fs_setname` and
+`fs_prg_entry` are not defined: no SETNAM, no BASIC stub — an X816 image
+declares itself with its 8-byte header, and launchers use `EXEC`. The
+`+xm_fs_*` macros changed **arity** (the dead device argument went away) so
+every old call site fails to assemble instead of quietly feeding a device
+number into a bank.
+
+Green in the emulator, each proven able to fail: `run-libfs.sh` grew test 7
+(the `dos_*` layer end-to-end, including the duplicate-mkdir `KERR_EXISTS`
+path and the BADARG refusal — a one-off control that made `dos_rename` lie
+was caught by the delete-after-rename check) and test 8 (`fs_save` of 20 KB
+of bank `$01`, `fs_load` back into bank `$03` across both arms of the read
+loop, CRCs compared, `fs_vload` read back byte-for-byte against the copy via
+`mem_peek`, and a missing file refused). Test 8's first version failed
+honestly and taught something worth keeping: it saved bank `$00`'s
+application area and compared CRCs later, but that region holds the test's
+own variables and the runtime's fat32 state, which mutate with every `fio`
+call in between — the CRCs disagreed *by construction*. Stable ground for a
+round trip is the program's own code, not its data. `run-libbmx.sh` is new:
+a save/wipe/load/compare round trip over a real card (chunk seams land on
+different pattern values by choice of a 255-coprime recurrence), plus the
+FORMAT and IO refusal paths, with a negative control that cuts the pump's
+port store and requires the byte compare to notice.
+
+With the queue empty, `x16.asm` stopped sourcing `const_kernal.asm` and
+`const_rom.asm` (§11.3), and the C glue (`runtime/x816_glue.s`) went
+per-module: every stub sits behind its gate's `#ifdef`, with new wrappers for
+`util/zx0`, `video/palette` and `storage/bmx` beside the existing math nine —
+`examples/c-lib` proves the palette one end-to-end by reading the written
+entry back through the data port.
