@@ -5,8 +5,26 @@ How to get a Forth prompt on X816, starting from
 lives in `C:\quartus\projects\X816_DurexForth`** — a clone with history, cut
 loose on 2026-08-03.
 
-**In progress.** Stage A (below) assembles; nothing has run yet. Two findings
-changed the plan after work started, both recorded in place:
+**Stage A BOOTS (2026-08-03).** `run-emu.sh` in the port repo is green with
+its negative control: the kernel shell `EXEC`s `FORTH.BIN` off a FAT32 card,
+`1 2 + .` answers `3 ok`, `xyzzy` answers `xyzzy?` — keystrokes via the real
+SMC path, output via `CON_PUTC`. Not yet run on hardware; no bitstream change
+is needed (the image + the existing kernel firmware are the whole test), so
+the board round is: put `FORTH.BIN` on the card, `run FORTH.BIN`.
+
+Getting from "assembles" to "boots" found four bugs, each recorded in the
+port's `7f95e89`: the C64 split-stack indexing relied on 6502 zp,x *page*
+wrap (native dp indexing wraps within bank 0); the relocated stack first
+landed in `$00-$21`, which §3.1 of [KERNEL.md](KERNEL.md) reserves for the
+C-runtime pseudo-registers — and that is enforced by reality, not
+convention: the VSYNC cursor handler runs C at interrupt time on exactly
+those bytes; the entry shim assumed more than `EXEC` guarantees (D, the I
+flag, S); and **the emulator's `(dp)`-indirect modes ignored DBR** — every
+program before Forth ran with `DBR=$00`, so the emulator had never been
+wrong before (X816_Emulator `a99751b`; the RTL's real 65816 core is
+believed correct — the hardware round will confirm).
+
+Two findings changed the plan after work started, both recorded in place:
 
 * **§4.1's converter route is dead, and ACME stays.** `acme2calypsi.py`
   cannot convert this tree: the `BACKLINK` macro builds the dictionary by
