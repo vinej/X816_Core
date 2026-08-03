@@ -870,6 +870,43 @@ settles the "should x16lib be rewritten 16-bit" question that `run-membench.sh`
 was built for: register width is worth at most 2x, *where the code lives* is
 worth 4.5x. See VERA_MEMORY_REVIEW.md §4.
 
+### Confirmed on hardware: banks $01-$04 really are BRAM
+
+`MEMBENCH.BIN` on a DE10-Nano, before and after the change, same 4 x 32 KB:
+
+| | before | after | c/b before | c/b after | gain |
+|---|---:|---:|---:|---:|---:|
+| `mem_copy` (library) | 198 ms | 197 ms | 12.1 | 12.0 | 1.01x |
+| 16-bit word loop | 819 ms | 295 ms | 50.0 | 18.0 | **2.78x** |
+| `MVN`, stub in bank `$01` | 492 ms | 196 ms | 30.0 | 12.0 | **2.51x** |
+| `mem_fill` (library) | 197 ms | 196 ms | 12.0 | 12.0 | 1.01x |
+| 16-bit word loop | 598 ms | 155 ms | 36.5 | 9.5 | **3.86x** |
+| `MVN` fill, stub in bank `$01` | 492 ms | 196 ms | 30.0 | 12.0 | **2.51x** |
+
+**The proof is that the two `MVN` rows now MATCH the library rows.** §6.2 above
+records them 2.5x apart, and traced it to where the instruction lived: the
+library's stub is four bytes of data in bank `$00`, the reference's is in the
+bank-`$01` code section. Move bank `$01` into BRAM and the distinction
+disappears — 12.0 against 12.0. Nothing else would produce that particular
+collapse.
+
+**And the two library rows not moving is the control.** They were already
+fetching from bank `$00`, so they had nothing to gain, and they gained nothing.
+A change that had sped everything up uniformly would have been measuring
+something else.
+
+**Why 12.0 and not the datasheet's 7.0.** `membench.s` copies between
+`$30:0000` and `$31:0000`, which are still SDRAM — only the CODE moved. `MVN`
+is three instruction fetches plus a read and a write per byte, so what is left
+is 3 BRAM cycles plus two SDRAM accesses at ~4.5 each. **Instruction fetch is
+now free; SDRAM DATA is the whole remaining cost.**
+
+That is the right thing to have fixed first. Calypsi's small data model already
+puts a program's variables in bank `$00`, so ordinary code — which fetches far
+more than it loads — gets the full benefit. What is left on the table is bulk
+DATA movement through SDRAM, and a program that keeps its working set inside
+banks `$01-$04` would see `MVN` reach 7.0.
+
 ### Four bugs the rewrite produced, and what each one teaches
 
 Recorded because every one of them was silent, and three were found by a test
