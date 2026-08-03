@@ -56,6 +56,26 @@ fi
 STAMP=$(date -r "$RBF_SRC" +%Y%m%d 2>/dev/null || date +%Y%m%d)
 RBF_DST="X816_${STAMP}.rbf"
 
+# RENAME QUARTUS'S UNDATED OUTPUT IN PLACE, and do it even though the copy
+# below would work without it.
+#
+# Reading X816.rbf was not enough on its own. A compile leaves it beside
+# whatever X816_<date>.rbf the PREVIOUS build was renamed to, and that older
+# file keeps a name saying it is current -- so output_files/ holds two
+# bitstreams, one fresh and unlabelled, one stale and authoritative-looking.
+# Anyone copying by hand takes the wrong one, and it looks like the change did
+# not work rather than like the wrong file was installed. Observed exactly
+# that: a 21:25 X816.rbf next to an 18:03 X816_20260802.rbf.
+#
+# `mv -f` so the stale dated file is REPLACED rather than left alongside.
+# mtime survives a rename, so STAMP above still describes the build.
+if [ "$(basename "$RBF_SRC")" = "X816.rbf" ]; then
+    RBF_RENAMED="$(dirname "$RBF_SRC")/$RBF_DST"
+    mv -f "$RBF_SRC" "$RBF_RENAMED"
+    echo "rename : output_files/X816.rbf -> $RBF_DST"
+    RBF_SRC="$RBF_RENAMED"
+fi
+
 # If the source filename already carries a date, it must agree with the mtime.
 # A disagreement means someone renamed a file, and the whole point of deriving
 # the name here is that the name is trustworthy.
