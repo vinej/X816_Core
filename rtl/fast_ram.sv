@@ -15,16 +15,24 @@
 // and a loader port that crosses into that clock by handshake rather than
 // taking a second RAM port.  VERA drops to a stock 128 KB to pay for it.
 //
-// WHY 32 BITS WIDE WHEN THE CPU IS 8
+// FOUR BYTE-WIDE ARRAYS, ONE PER LANE -- AND NOT ONE 32-BIT ARRAY
 //
-// Packing.  M10K is 10,240 bits, and a byte-wide array uses only 8,192 of
-// them -- bank0_ram measures 65 blocks for 64 KB, a fifth wasted.  At 32 bits
-// the block is fully used, so 256 KB costs ~205 blocks instead of ~260, and
-// 55 M10K is the difference between comfortable and not on a device that is
-// already 92% full.
+// A 32-bit array with byte enables packs better on paper: M10K is 10,240 bits
+// and a byte-wide array uses only 8,192, so 256 KB would cost ~205 blocks
+// instead of ~260.  That version was written, and Quartus would not infer it.
 //
-// The cost is one mux on the read path and byte enables on the write path,
-// both of which are free in logic terms.  addr[1:0] picks the byte.
+// The reason is in main_ram.v's header: "one always block per lane; Quartus's
+// BRAM pattern matcher wants that idiom".  Writing a SLICE of an array element
+// -- mem[w][7:0] <= d -- is not the pattern.  bank0_ram writes whole elements
+// (mem[wa] <= wd) and main_ram splits into eight nibble arrays precisely so
+// that every write is a whole element.  Both infer; the byte-enable form did
+// not, and the symptom was the one main_ram.v names: "the design grows by
+// ~50000 LEs and elaboration takes over an hour."
+//
+// So: four arrays, addr[1:0] selects which one a write lands in and which one
+// a read is muxed from.  Every write is a whole element of a byte-wide array,
+// which is bank0_ram's idiom exactly.  It costs 55 M10K blocks over the
+// theoretical best, and it is the version that exists.
 //
 // WHY THE MEMORY IS INFERRED HERE AND INSTANTIATED IN switch_ram.sv
 //
@@ -73,8 +81,6 @@ module fast_ram #(
 );
 
     localparam AW = $clog2(WORDS);
-
-    (* ramstyle = "M10K" *) reg [31:0] mem [0:WORDS-1];
 
     // ---- loader -> cpu_clk, by handshake ---------------------------------
     // Copied from bank0_ram: a small FIFO on the loader side, one request
@@ -132,30 +138,40 @@ module fast_ram #(
     wire   [7:0]  w_data = ld_take ? req_data         : wr_data;
     wire          w_en   = ld_take | (cs & we);
 
-    // Byte enables rather than a read-modify-write: this is the template
-    // Quartus infers byte-enabled M10K from, and it is what lets the array be
-    // 32 bits wide -- see the header on packing.
-    always @(posedge clk) begin
-        if (w_en) begin
-            if (w_lane == 2'd0) mem[w_word][7:0]   <= w_data;
-            if (w_lane == 2'd1) mem[w_word][15:8]  <= w_data;
-            if (w_lane == 2'd2) mem[w_word][23:16] <= w_data;
-            if (w_lane == 2'd3) mem[w_word][31:24] <= w_data;
-        end
-    end
+    // One array per byte lane.  Every write below assigns a WHOLE element of a
+    // byte-wide array, which is bank0_ram's idiom and the one that infers.
+    (* ramstyle = "M10K" *) reg [7:0] mem0 [0:WORDS-1];
+    (* ramstyle = "M10K" *) reg [7:0] mem1 [0:WORDS-1];
+    (* ramstyle = "M10K" *) reg [7:0] mem2 [0:WORDS-1];
+    (* ramstyle = "M10K" *) reg [7:0] mem3 [0:WORDS-1];
 
-    // ---- read, on the NEGEDGE, so the byte is ready at the CPU's posedge --
-    reg [31:0] rd_word;
+    wire we0 = w_en & (w_lane == 2'd0);
+    wire we1 = w_en & (w_lane == 2'd1);
+    wire we2 = w_en & (w_lane == 2'd2);
+    wire we3 = w_en & (w_lane == 2'd3);
+
+    wire [AW-1:0] r_word = addr[AW+1:2];
+    reg  [7:0] q0, q1, q2, q3;
     reg  [1:0] rd_lane;
-    always @(negedge clk) begin
-        rd_word <= mem[addr[AW+1:2]];
-        rd_lane <= addr[1:0];
-    end
 
-    assign rd_data = (rd_lane == 2'd0) ? rd_word[7:0]
-                   : (rd_lane == 2'd1) ? rd_word[15:8]
-                   : (rd_lane == 2'd2) ? rd_word[23:16]
-                                       : rd_word[31:24];
+    // Posedge write, NEGEDGE read -- bank0_ram's convention, and what makes
+    // the access single-cycle: the M10K gets a half-cycle head start so the
+    // byte is ready when the CPU samples at the next posedge.
+    always @(posedge clk) if (we0) mem0[w_word] <= w_data;
+    always @(posedge clk) if (we1) mem1[w_word] <= w_data;
+    always @(posedge clk) if (we2) mem2[w_word] <= w_data;
+    always @(posedge clk) if (we3) mem3[w_word] <= w_data;
+
+    always @(negedge clk) q0      <= mem0[r_word];
+    always @(negedge clk) q1      <= mem1[r_word];
+    always @(negedge clk) q2      <= mem2[r_word];
+    always @(negedge clk) q3      <= mem3[r_word];
+    always @(negedge clk) rd_lane <= addr[1:0];
+
+    assign rd_data = (rd_lane == 2'd0) ? q0
+                   : (rd_lane == 2'd1) ? q1
+                   : (rd_lane == 2'd2) ? q2
+                                       : q3;
 
 endmodule
 
