@@ -113,6 +113,14 @@ than silently falling back.
 flip is one register write and is tear-free by construction: a write landing
 mid-frame takes effect at the next frame boundary.
 
+One caveat, found in review and accepted rather than engineered away: the base
+crosses from `cpu_clk` to `pix_clk` without a handshake, so a write landing
+within nanoseconds of the vsync edge itself can latch a torn value — one frame
+scanned from a garbled offset, self-correcting at the next vsync. The clean
+idiom avoids it entirely: **write `DISPBASE` right after detecting vsync**
+(the frame IRQ), which is where a page flip naturally lives anyway and is as
+far from the latch as it is possible to be.
+
 Upstream has no such register (`vera_2.md` §8 lists double-buffering as future
 work). It fits here because 1 MB holds:
 
