@@ -66,6 +66,9 @@ ADDRESSES ARE HEX AND MAY BE WRITTEN 01:0000 OR 010000.
 THE WHOLE 16 MB IS DIRECTLY ADDRESSABLE: THERE IS NO BANKING.
 
 TRY:
+  RUN FORTH.BIN         DUREXFORTH, A FORTH REPL ON THE KERNEL CONSOLE.
+                        TRY: 1 2 + .        (EXPECT: 3 OK)
+                        NO ESC YET: RESET THE CORE FOR THE PROMPT.
   TYPE README.TXT
   CD DEMO
   LS
@@ -216,6 +219,19 @@ for name, path in DEMOS:
         dst.write(src.read())
     added += 1
     print("  added: /DEMO/" + name)
+
+# durexForth (X816_DurexForth) goes at the ROOT, not /DEMO: `run FORTH.BIN`
+# works straight from the prompt, and the root is where the kernel's future
+# auto-start would look (X816_core doc/DUREXFORTH.md, order of work step 8).
+forth = os.path.join(os.path.dirname(CORE), "X816_DurexForth", "build",
+                     "forth.bin")
+if os.path.exists(forth):
+    with open(forth, "rb") as src, fs.open("/FORTH.BIN", "wb") as dst:
+        dst.write(src.read())
+    added += 1
+    print("  added: /FORTH.BIN")
+else:
+    print("  skipped (not built): FORTH.BIN")
 
 fs.makedir("/PROGS")
 fs.writetext("/PROGS/PUT.TXT", "PUT YOUR OWN PROGRAMS HERE.\n")
