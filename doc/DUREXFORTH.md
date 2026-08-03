@@ -1,15 +1,45 @@
 # X816 — porting durexForth
 
 How to get a Forth prompt on X816, starting from
-[vinej/X16_durexforth](https://github.com/vinej/X16_durexforth) (local:
-`C:\quartus\projects\X16_durexforth`).
+[vinej/X16_durexforth](https://github.com/vinej/X16_durexforth). **The port
+lives in `C:\quartus\projects\X816_DurexForth`** — a clone with history, cut
+loose on 2026-08-03.
 
-**Planned. None of this is built.** Written before the code, as
-[KERNEL.md](KERNEL.md) was.
+**In progress.** Stage A (below) assembles; nothing has run yet. Two findings
+changed the plan after work started, both recorded in place:
 
-**It waits on the kernel.** Forth's whole value is the interactive prompt, and
-its platform hooks are almost entirely console I/O. Start this after
-[KERNEL.md](KERNEL.md) §9 steps 1-4 — SD card, FAT32, native API, console.
+* **§4.1's converter route is dead, and ACME stays.** `acme2calypsi.py`
+  cannot convert this tree: the `BACKLINK` macro builds the dictionary by
+  reassigning the program counter at every word definition, which has no
+  equivalent in Calypsi's section model. ACME 0.97 assembles the 65816
+  natively (verified byte-for-byte), Forth links against nothing, so Calypsi
+  buys nothing here — the port keeps the ACME dialect and `BACKLINK`
+  verbatim.
+* **Hooks come before widening.** With no conversion step in the way, the
+  cheapest path to a green REPL is to run the existing 16-bit-cell 8-bit
+  Forth against the kernel console first — the whole C64-shaped image
+  relocated unchanged into bank `$01` with `PBR = DBR = $01` — and get
+  `test.fs` green as a baseline. §7's order (widen, then hooks) assumed the
+  conversion pain came first; inverting it means the regression suite exists
+  *before* the risky 32-bit widening, not after. Cell widening (§2) is
+  unchanged as the goal; it is stage B.
+
+Stage A also paid for four 65816 traps worth knowing about (all fixed in the
+port's `d2bec06`): an 8-bit `txs` in native mode zeroes SH and moves the
+return stack into the direct page; `jmp (abs)` fetches its pointer from bank
+`$00` regardless of DBR; `lda $103,x` stack-frame reads go through DBR to the
+wrong bank (stack-relative `lda n,s` is the fix, and is shorter); and the I/O
+page is `$00:9F00` while DBR is `$01`, so every VERA word switches DBR around
+its body.
+
+**The wait is over (2026-08-03).** Forth's whole value is the interactive
+prompt, and its platform hooks are almost entirely console I/O — which is why
+this waited on [KERNEL.md](KERNEL.md) §9 steps 1-4. Those are now green: SD
+card and FAT32 on hardware, the native API implemented, the console on
+hardware, and the shell prompt with `run` behind it ([SHELL.md](SHELL.md)).
+One caveat carries over: the keyboard read is verified only in the emulator,
+and a Forth REPL is exactly what will exercise it on the board — a dead prompt
+there is a console bug before it is a Forth bug.
 
 ---
 
@@ -33,8 +63,8 @@ provenance problem — see [KERNEL.md](KERNEL.md) §6.
 ### 2.1 Cells are 32 bits
 
 Not negotiable on this machine, for a reason that has nothing to do with
-arithmetic: **the dictionary lives in SDRAM, so `HERE` and every compilation
-target is a 24-bit address.** With 16-bit cells the compiler could not express
+arithmetic: **the dictionary lives outside bank `$00`, so `HERE` and every
+compilation target is a 24-bit address.** With 16-bit cells the compiler could not express
 its own targets without a far-word escape hatch, and `@`/`!` would reach 64 KB
 while everything else in the machine is flat — recreating exactly the banking
 awkwardness X816 exists to remove.
@@ -75,6 +105,10 @@ emits `OP_JSR`, `OP_JMP`, `OP_RTS`, `OP_INX` directly. Keeping the whole
 dictionary inside one bank means those stay `jsr`/`rts` and the code generator
 barely changes.
 
+Since 2026-08-02 the first bank is also the fastest place on the machine:
+banks `$01-$04` are single-cycle BRAM ([MEMORY_MAP.md](MEMORY_MAP.md)), so a
+one-bank dictionary at `$01:0000` runs with zero wait states.
+
 64 KB of *compiled Forth* is a great deal of Forth, and **data is not subject
 to this limit** — 32-bit cells and long addressing reach the whole 16 MB. Take
 the 64 KB code ceiling first and treat `jsl`/`rtl` compilation as a later
@@ -91,7 +125,7 @@ upgrade, not a prerequisite.
 | `lda (W),y` | `lda [W],y` — long indirect, reaches 16 MB |
 | `W` = 2-byte direct-page pointer | `W` = 3-byte (pad to 4) |
 | `PUTCHR = $ffd2` (KERNAL CHROUT) | `CON_PUTC` ([KERNEL.md](KERNEL.md) §5.1) |
-| dictionary `$801..$9EFF`, grows down | SDRAM, 24-bit `HERE` |
+| dictionary `$801..$9EFF`, grows down | `$01:0000`+, 24-bit `HERE` |
 | `TIB = $600` | bank `$00`, see §5 |
 
 `@` is the pattern for every word that dereferences a Forth address: it copies
@@ -151,7 +185,7 @@ Against [MEMORY_MAP.md](MEMORY_MAP.md) and [KERNEL.md](KERNEL.md) §3.1:
 | data + return stack planes | bank `$00` | indexed every primitive; BRAM is single-cycle |
 | `W` and scratch | direct page, bank `$00` | forced there by the architecture anyway |
 | TIB | bank `$00` | small, touched constantly |
-| dictionary (code + data) | `$01:0000`+ SDRAM | this is the program |
+| dictionary (code + data) | `$01:0000`+ — BRAM to `$04:FFFF`, SDRAM beyond | this is the program, in single-cycle RAM |
 
 Two constraints to check before choosing addresses:
 
