@@ -5,6 +5,13 @@ How to get a Forth prompt on X816, starting from
 lives in `C:\quartus\projects\X816_DurexForth`** — a clone with history, cut
 loose on 2026-08-03.
 
+**Stage C (jsl/rtl, 256 KB program space) is GREEN ON HARDWARE
+(2026-08-04)** — the MiSTer runs the full suite on the long-threaded
+image; compiled code spans banks `$01-$04`, and the boot banner reports
+~245 KB free. `stage-c` is merged to the port's main; doc/STAGEC.md in
+the port records the conversion and its traps (the `$60`-blob bank-byte
+leak above all).
+
 **Stage B (32-bit cells) is GREEN ON HARDWARE (2026-08-04)** — the MiSTer
 runs `INCLUDE TEST` to the PASS banner on the stage-B image; `stage-b` is
 merged to the port's main.
