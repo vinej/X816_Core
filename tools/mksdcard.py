@@ -67,7 +67,10 @@ THE WHOLE 16 MB IS DIRECTLY ADDRESSABLE: THERE IS NO BANKING.
 
 TRY:
   RUN FORTH.BIN         DUREXFORTH, A FORTH REPL ON THE KERNEL CONSOLE.
+                        IT LOADS ITS BASE WORDS FROM THIS CARD AT BOOT.
                         TRY: 1 2 + .        (EXPECT: 3 OK)
+                        THEN: INCLUDE TEST  (THE PORTED ANS TEST SUITE;
+                        SEVERAL MINUTES AT 8 MHZ, ENDS IN A PASS BANNER)
                         NO ESC YET: RESET THE CORE FOR THE PROMPT.
   TYPE README.TXT
   CD DEMO
@@ -223,8 +226,8 @@ for name, path in DEMOS:
 # durexForth (X816_DurexForth) goes at the ROOT, not /DEMO: `run FORTH.BIN`
 # works straight from the prompt, and the root is where the kernel's future
 # auto-start would look (X816_core doc/DUREXFORTH.md, order of work step 8).
-forth = os.path.join(os.path.dirname(CORE), "X816_DurexForth", "build",
-                     "forth.bin")
+FORTH_REPO = os.path.join(os.path.dirname(CORE), "X816_DurexForth")
+forth = os.path.join(FORTH_REPO, "build", "forth.bin")
 if os.path.exists(forth):
     with open(forth, "rb") as src, fs.open("/FORTH.BIN", "wb") as dst:
         dst.write(src.read())
@@ -232,6 +235,33 @@ if os.path.exists(forth):
     print("  added: /FORTH.BIN")
 else:
     print("  skipped (not built): FORTH.BIN")
+
+# The Forth sources ride along at the root under the bare names `include`
+# asks for: FORTH.BIN includes BASE at boot (a missing BASE is a reported
+# error, not a hang), and `include test` runs the ported test suite - on
+# hardware as well as in the emulator, which is the point of shipping the
+# tests. Bare 8.3 names, no extension, exactly as the words are typed.
+# (repo file, card name): card names are BARE 8.3 - the FAT32 reader
+# refuses names longer than 8 characters and skips long filenames, so
+# "testcoreplus" travels as "coreplus" (matching test/test.fs's includes).
+FORTH_SRC = [("forth", n, n) for n in
+             ["base", "asm", "wordlist", "labels", "doloop", "debug",
+              "require", "accept", "compat"]] + \
+            [("test", n, c) for n, c in
+             [("tester", "tester"), ("testcore", "testcore"),
+              ("testcoreplus", "coreplus"), ("testcoreext", "coreext"),
+              ("testexception", "testexc"), ("testdouble", "testdbl"),
+              ("testvideo", "testvid"), ("testsprite", "testspr"),
+              ("testtile", "testtile"), ("testpalfx", "testpal"),
+              ("testcoreadd", "coreadd"), ("test", "test"), ("1", "1")]]
+for subdir, name, card in FORTH_SRC:
+    path = os.path.join(FORTH_REPO, subdir, name + ".fs")
+    if not os.path.exists(path):
+        print("  skipped (missing): " + card.upper())
+        continue
+    with open(path, "rb") as src, fs.open("/" + card.upper(), "wb") as dst:
+        dst.write(src.read())
+print("  added: %d forth source files" % len(FORTH_SRC))
 
 fs.makedir("/PROGS")
 fs.writetext("/PROGS/PUT.TXT", "PUT YOUR OWN PROGRAMS HERE.\n")

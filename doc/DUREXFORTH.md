@@ -5,6 +5,20 @@ How to get a Forth prompt on X816, starting from
 lives in `C:\quartus\projects\X816_DurexForth`** — a clone with history, cut
 loose on 2026-08-03.
 
+**The full test suite is GREEN in the emulator (2026-08-04).** The port's
+`run-tests.sh` ends in `+++ ALL TESTS PASSED +++` with its negative control:
+the ANS core, core-plus, core-ext, exception and double suites plus the
+X816-ported video/sprite/tile/palfx/coreadd groups — 3,830 lines of Forth
+tests — run from `AUTORUN` on a FAT32 card through the kernel FS_* API.
+The stage-B cell widening now has the regression suite it was ordered
+around. On the card: `INCLUDE TEST` at the REPL runs the same suite on
+hardware (several minutes at 8 MHz). Two lessons from getting there are
+recorded in the port's `8f4e111`: the late suites still carried X16-isms
+(text lives on VERA layer 0 here, not layer 1; register readbacks need
+`ioc@`, not a DBR-relative `c@`), and every "failure" before those was the
+harness misreading its own screen decode — the guest exit code via `$9FBC`
+is the verdict channel, the GIF is diagnostics.
+
 **Stage A is GREEN ON HARDWARE (2026-08-03).** Confirmed on a DE10-Nano:
 `run FORTH.BIN` from the kernel prompt brings up the REPL on the real
 keyboard and console. In the emulator, `run-emu.sh` is green with its
