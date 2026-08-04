@@ -133,21 +133,34 @@ word and high word — and the shape is unchanged. The same instruction count,
 with a 16-bit accumulator instead of an 8-bit one. The stack is not
 restructured; it is widened.
 
-### 2.3 The dictionary starts in one bank
+### 2.3 The dictionary: one bank first, then the whole fast RAM
 
 durexForth compiles **native code**, not threaded tokens: `asm/compiler.asm`
-emits `OP_JSR`, `OP_JMP`, `OP_RTS`, `OP_INX` directly. Keeping the whole
-dictionary inside one bank means those stay `jsr`/`rts` and the code generator
-barely changes.
+emits opcodes directly. The port grows the reachable program space in two
+steps, and the second is a REQUIREMENT, not an option — the machine carries
+256 KB of single-cycle BRAM (banks `$01-$04`,
+[MEMORY_MAP.md](MEMORY_MAP.md)) precisely so programs stop living inside a
+C64-sized box:
 
-Since 2026-08-02 the first bank is also the fastest place on the machine:
-banks `$01-$04` are single-cycle BRAM ([MEMORY_MAP.md](MEMORY_MAP.md)), so a
-one-bank dictionary at `$01:0000` runs with zero wait states.
+* **Stage B (done):** the whole dictionary inside bank `$01` — calls stay
+  3-byte `jsr`/`rts` and the code generator barely changes. 64 KB ceiling,
+  ~47 KB free at boot. Data already reaches the full 16 MB through the
+  32-bit cells.
+* **Stage C: `jsl`/`rtl` threading over banks `$01-$04`.** Dictionary
+  words end `rtl` and are called by 4-byte `jsl`; `HERE` is a 24-bit
+  pointer that walks `$01` up to `$04` (a definition never straddles a
+  bank); headers keep growing down inside bank `$01`, which comfortably
+  indexes thousands of words. **Program space becomes the full 256 KB of
+  single-cycle RAM** — code, headers and near data — with SDRAM behind it
+  for bulk data via far-allot words. Costs, measured honestly: one byte
+  and ~2 cycles per compiled call, and every word that juggles raw return
+  addresses moves from the 16-bit `rw>`/`w>r` pair to a 24-bit `rl>`/`l>r`
+  pair — stage B already funnelled all of those through one choke point,
+  which is what makes stage C tractable.
 
-64 KB of *compiled Forth* is a great deal of Forth, and **data is not subject
-to this limit** — 32-bit cells and long addressing reach the whole 16 MB. Take
-the 64 KB code ceiling first and treat `jsl`/`rtl` compilation as a later
-upgrade, not a prerequisite.
+In-word control flow (branches, loop operands) stays 16-bit: a definition
+lives inside one bank, so BRANCH re-attaches the bank byte it pulled with
+the return address.
 
 ---
 
