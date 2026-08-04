@@ -108,6 +108,13 @@ module sd_block (
     input  logic        reset_n,
     input  logic        cs,             // $9F80-$9F8F selected
     input  logic        we,
+    input  logic        adv,            // CPU consumes its bus state this
+                                        // cycle (x816.sv cpu_adv).  The TURBO
+                                        // pacer holds a bus state for extra
+                                        // cycles; every register access with
+                                        // a side effect (command launch,
+                                        // window-pointer bump) must commit
+                                        // exactly once, on this cycle.
     input  logic  [3:0] addr,           // cpu_a[3:0]
     input  logic  [7:0] wr_data,
     output logic  [7:0] rd_data,
@@ -160,7 +167,7 @@ module sd_block (
     logic [1:0] err_sync;
 
     logic [7:0] cpu_rd_s2;              // the CPU's view of the buffer window
-    wire        buf_a_we = cs & we & (addr == 4'hC) & ~busy;
+    wire        buf_a_we = cs & we & (addr == 4'hC) & ~busy & adv;
 
     always_ff @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
@@ -178,7 +185,7 @@ module sd_block (
                 err_cpu <= err_sync[1];
             end
 
-            if (cs & we & ~busy) begin
+            if (cs & we & ~busy & adv) begin
                 case (addr)
                     4'h1: r_lba[7:0]    <= wr_data;
                     4'h2: r_lba[15:8]   <= wr_data;
@@ -207,8 +214,9 @@ module sd_block (
                     default: ;
                 endcase
             end
-            // A read of the data window advances the pointer too.
-            if (cs & ~we & (addr == 4'hC) & ~busy)
+            // A read of the data window advances the pointer too -- once,
+            // on the committing cycle.
+            if (cs & ~we & (addr == 4'hC) & ~busy & adv)
                 bufptr <= bufptr + 9'd1;
         end
     end

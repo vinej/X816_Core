@@ -32,10 +32,28 @@
 //    $9F10-$9F1F  VIA #2      $9F40-$9F4F  YM2151
 //    $9F80-$9F8F  SYSCTL      (new: X816 system control, not an X16 register)
 //
-//  CLOCKS come from the X16 core's existing PLL IP, unchanged, so no IP
-//  regeneration is needed: outclk_0 25.0 MHz (VERA pixel), outclk_1 12.5 MHz
-//  (spare), outclk_2 8.0 MHz (CPU + peripherals), outclk_3 100.0 MHz (SDRAM +
-//  hps_io).
+//  CLOCKS come from the X16 core's PLL IP with outclk_1 retuned to 14 MHz
+//  (a hand edit of the frequency parameter in pll/pll_0002.v -- Quartus
+//  recomputes the counters at synthesis; VCO 1400 MHz divides all four
+//  outputs exactly): outclk_0 25.0 MHz (VERA pixel), outclk_1 14.0 MHz
+//  (CPU + peripherals), outclk_2 8.0 MHz (spare -- the pre-turbo CPU clock),
+//  outclk_3 100.0 MHz (SDRAM + hps_io).
+//
+//  TURBO.  The cpu_clk domain runs at 14 MHz (STA: domain Fmax 17.7 MHz,
+//  limited by the negedge BRAM reads, so 14 closes with a 26% margin; 12.5
+//  and 14 both proven on hardware 2026-08-04).  14 IS THE CEILING: a 16 MHz
+//  build passed STA everywhere (+8 ns setup in this domain) and still
+//  crashed the board -- rtl/cpu_pace.sv's header carries the post-mortem.
+//  CPU speed is set by SYSCTL[2] via rtl/cpu_pace.sv: 0 (reset default) paces
+//  the CPU's clock-enable to exactly 8.000 MHz average for compatibility with
+//  every number measured so far; 1 advances every cycle = 14 MHz.  The OSD
+//  "CPU Turbo" switch (CONF_STR O6) ORs over the software bit, giving a
+//  persistent whole-machine 14 MHz without touching any software.  The
+//  domain CLOCK never switches, so peripherals, the ms timer and the VERA
+//  strobe timing are mode-independent.  A paced CPU HOLDS a bus state for
+//  extra cycles, so every level-sensitive commit point in the machine takes
+//  `cpu_adv` (advance = cpu_rdy & pace) instead of cpu_rdy -- grep cpu_adv
+//  below; flat_sdram and sd_block grew an `adv` port for the same reason.
 //
 //  NOTE the emu-level PLL instance must stay named `pll` with inner instance
 //  `pll_inst`: sys/sys_top.sdc matches the path emu|pll|pll_inst|altera_pll_i
@@ -60,8 +78,8 @@ module emu
     // ========================================================================
     wire pll_locked;
     wire pix_clk;       // VERA pixel clock            -- 25.0 MHz
-    wire aud_mclk;      // spare                        -- 12.5 MHz
-    wire cpu_clk;       // CPU + VIA + SMC              --  8.0 MHz
+    wire cpu_clk;       // CPU + VIA + SMC              -- 14.0 MHz (see TURBO)
+    wire clk8_spare;    // spare: the pre-turbo CPU clock --  8.0 MHz
     wire sdram_clk;     // SDRAM controller + hps_io    -- 100.0 MHz
 
     // FREE-RUN the core PLL (rst tied 0).  hps_io and the pixel clock are both
@@ -73,8 +91,8 @@ module emu
         .refclk   (CLK_50M),
         .rst      (1'b0),
         .outclk_0 (pix_clk),
-        .outclk_1 (aud_mclk),
-        .outclk_2 (cpu_clk),
+        .outclk_1 (cpu_clk),      // 14.0 MHz -- retuned from 12.5 (round 2)
+        .outclk_2 (clk8_spare),   //  8.0 MHz -- was cpu_clk before turbo
         .outclk_3 (sdram_clk),
         .locked   (pll_locked)
     );
@@ -130,6 +148,13 @@ module emu
         // OFF -- with it off the core is bit-identical to stock VERA, and the
         // $9F61 ID register reads $00 so software can feature-detect.
         "O5,VERA2 Bitmap Layer,Off,On;",
+        // TURBO from the OSD: ORed with SYSCTL[2], so On forces 14 MHz from
+        // power-on without any software involvement (boot.s's `stz
+        // X816_SYSCTL` clears the SOFTWARE bit while dropping the overlay --
+        // the OSD bit is immune).  Off leaves the machine software-controlled:
+        // 8 MHz at reset, 14 when a program sets $9F80 bit 2.  The setting
+        // persists in the core's .cfg like every OSD option.
+        "O6,CPU Turbo,Off (8MHz),On (14MHz);",
         "-;",
         "J1,A,B,X,Y,L,R,Select,Start;",
         "V,v0.1"
@@ -266,6 +291,36 @@ module emu
     wire        cpu_wait_state;
     wire        cpu_rdy;              // driven by the stall network below
 
+    // TURBO pacing (header, and rtl/cpu_pace.sv).  cpu_rdy is the STALL
+    // network (VERA read stall, SDRAM, SD); pace_adv is the SPEED governor.
+    // cpu_adv is their conjunction: "the CPU consumes its bus state at this
+    // posedge".  Every level-sensitive commit point below takes cpu_adv, NOT
+    // cpu_rdy -- with the pacer holding the CPU, cpu_rdy can be high for
+    // cycles during which nothing must commit twice.
+    wire pace_adv;
+    wire cpu_adv = cpu_rdy & pace_adv;
+
+    // Declared here, written by the SYSCTL block below -- declare-before-use,
+    // the vera2 wires' lesson.
+    reg sysctl_turbo = 1'b0;
+
+    // OSD turbo (CONF_STR O6, status[6]) is quasi-static but crosses from
+    // hps_io's 100 MHz domain; 2-FF sync it before it touches the CPU enable
+    // cone.  Effective speed is the OR: either the OSD or software may engage
+    // 14 MHz, and the pacer switches modes cleanly mid-run by design
+    // (sim/tb_cpu_pace.v property 4).
+    reg [1:0] osd_turbo_sync = 2'b00;
+    always @(posedge cpu_clk) osd_turbo_sync <= {osd_turbo_sync[0], status[6]};
+    wire osd_turbo   = osd_turbo_sync[1];
+    wire turbo_en    = sysctl_turbo | osd_turbo;
+
+    cpu_pace u_pace (
+        .clk     (cpu_clk),
+        .reset_n (cpu_reset_n),
+        .turbo   (turbo_en),
+        .adv_en  (pace_adv)
+    );
+
     wire vera_irq_n, via1_irq_n, via2_irq_n, ym_irq_n;
 
     // VERA IRQ is generated in pix_clk -> 2-FF sync into cpu_clk.
@@ -293,7 +348,7 @@ module emu
 
     p65c816_flat_wrap u_cpu (
         .clk        (cpu_clk),
-        .enable     (cpu_rdy),
+        .enable     (cpu_adv),
         .res_n      (cpu_reset_n),
         .irq_n      (cpu_irq_n),
         .nmi_n      (cpu_nmi_n),
@@ -367,17 +422,36 @@ module emu
     //   bit 0  boot ROM overlay enable.  Set at reset; software clears it once
     //          it has populated $FF00-$FFFF in RAM, after which bank 0 is 64 KB
     //          of uniform RAM and the vectors are patchable.
+    //   bit 2  TURBO.  0 at reset: the CPU is paced to an exact 8.000 MHz
+    //          average (rtl/cpu_pace.sv).  Write 1 for the full 14 MHz.
+    //          Read-write, takes effect on the next cycle, switchable at any
+    //          time -- the domain clock never changes, only the CPU's enable.
+    //          The OSD "CPU Turbo" switch (status[6]) ORs over this bit:
+    //          with it On the machine is 14 MHz regardless of what software
+    //          writes here.  Read-back returns the EFFECTIVE speed
+    //          (software bit OR OSD), so a program that asserts its speed
+    //          sees the truth -- with the side effect that a read-modify-
+    //          write under OSD-On copies 1 into the software bit, which is
+    //          harmless: the machine was already at 14.
     // Read-back also exposes the CPU's live E flag (bit 1) so software can
     // assert that it really is in native mode.  cpu_wait_state is deliberately
     // NOT exposed here: it is high whenever the CPU is not advancing for any
     // reason, so a read of it can only ever return 0 -- the read itself commits
     // only on an advancing cycle.  It goes to LED_USER instead.
+    //
+    // This write commit is deliberately NOT gated by cpu_adv: a paced CPU
+    // holds the write state for extra cycles and the same value lands each
+    // time -- idempotent, the via65c22 write argument exactly.
     // ========================================================================
     reg sysctl_overlay = 1'b1;
     always @(posedge cpu_clk or negedge cpu_reset_n) begin
-        if (!cpu_reset_n)                                sysctl_overlay <= 1'b1;
-        else if (sysctl_cs && ~cpu_rwn && cpu_a[3:0] == 4'h0)
-                                                         sysctl_overlay <= cpu_do[0];
+        if (!cpu_reset_n) begin
+            sysctl_overlay <= 1'b1;
+            sysctl_turbo   <= 1'b0;
+        end else if (sysctl_cs && ~cpu_rwn && cpu_a[3:0] == 4'h0) begin
+            sysctl_overlay <= cpu_do[0];
+            sysctl_turbo   <= cpu_do[2];
+        end
     end
     assign rom_overlay_en = sysctl_overlay;
 
@@ -388,7 +462,7 @@ module emu
     // $9F80 is SYSCTL proper; $9F81-$9F8C belong to the SD block device, and
     // $9F8D-$9F8F are the keyboard diagnostic counters.
     wire [7:0] sysctl_data = (cpu_a[3:0] == 4'h0)
-                           ? {6'b0, cpu_emu_mode, sysctl_overlay}
+                           ? {5'b0, turbo_en, cpu_emu_mode, sysctl_overlay}
                            : sd_reg_sel ? sd_reg_data
                            : (cpu_a[3:0] == 4'hD) ? dbg_arrive_r
                            : (cpu_a[3:0] == 4'hE) ? dbg_push_r
@@ -413,12 +487,12 @@ module emu
     // ========================================================================
     wire [7:0] timer_data;
 
-    ms_timer #(.TIMER_DIV(13'd8000)) u_timer (
+    ms_timer #(.TIMER_DIV(14'd14000)) u_timer (
         .clk     (cpu_clk),
         .reset_n (cpu_reset_n),
         .cs      (timer_cs),
         .rd      (cpu_rwn),
-        .cpu_rdy (cpu_rdy),
+        .cpu_rdy (cpu_adv),
         .addr    (cpu_a[1:0]),
         .rd_data (timer_data)
     );
@@ -428,6 +502,7 @@ module emu
         .reset_n      (cpu_reset_n),
         .cs           (sysctl_cs),
         .we           (~cpu_rwn),
+        .adv          (cpu_adv),
         .addr         (cpu_a[3:0]),
         .wr_data      (cpu_do),
         .rd_data      (sd_reg_data),
@@ -508,6 +583,7 @@ module emu
         .reset_n    (mem_reset_n),        // stays alive through a download
         .cs         (flat_cs),
         .we         (~cpu_rwn),
+        .adv        (cpu_adv),
         .byte_addr  (cpu_a),
         .wr_data    (cpu_do),
         .rd_data    (sdram_data),
@@ -544,49 +620,79 @@ module emu
     // ========================================================================
     // VERA  --  CPU bus pipeline
     //
-    // Carried over verbatim from the X16 core: a 4-cycle write / 2-cycle
-    // read-stall pipeline that absorbs the cpu_clk vs pix_clk skew so VERA
-    // sees stable address/data/strobe for the whole transaction.
+    // Inherited from the X16 core and rescaled for the cpu_clk domain (14 MHz
+    // since the second turbo step; the cycle counts below were validated on
+    // hardware at 12.5 and again at 14): the pipeline absorbs the cpu_clk vs
+    // pix_clk skew so VERA sees stable address/data/strobe for the whole
+    // transaction.  VERA's top.v 3-FF syncs the strobes at 25 MHz and
+    // EDGE-detects them (capture on the synced rising edge, commit on the
+    // falling edge), so a wider or held strobe is still exactly one bus
+    // event -- that property is what both the rescale and the TURBO pacer
+    // lean on.
+    //
+    //   WRITES are posted: the CPU advances immediately and a fixed 3-stage
+    //   q-window presents the strobe for 214 ns (240 at 12.5 MHz, 250 in the
+    //   8 MHz design), with data/drive chained one stage past the strobe.  A
+    //   paced CPU holds vera_write for extra cycles; the q-chain just shifts
+    //   the widened pulse -- still one falling edge, same data throughout.
+    //   The window must NOT be widened past 3 stages: two turbo writes land
+    //   as little as 4 cpu cycles apart, and a 4-stage OR-window would bridge
+    //   the gap between them -- no falling edge, two writes fused into one.
+    //
+    //   READS stall the CPU (3 cycles, 214 ns of strobe -- 240 at 12.5 MHz,
+    //   was 2 cycles at 8) and the strobe is delayed-start, LIVE-END:
+    //   asserted from one cycle into the read until the CPU actually consumes
+    //   it.  214 ns is the thinnest margin at 14 MHz: worst case the 25 MHz
+    //   sync needs 3 pix cycles to see the rise plus one to present data =
+    //   ~160 ns before extbus_d is meaningful, leaving ~54 ns -- proven on
+    //   hardware 2026-08-04.  (The 16 MHz attempt widened this stall to 4
+    //   cycles and still crashed for reasons STA could not see; the revert
+    //   restores the proven 3.)  Live-end matters twice over.  With the
+    //   pacer holding the CPU past the stall release, the strobe stays low
+    //   until the delayed sample -- VERA keeps driving data (top.v drives
+    //   extbus_d for as long as rd_n is low).  And it RELEASES the instant
+    //   the CPU moves on, so the data-port auto-increment (which VERA
+    //   commits on the falling edge) lands ~390 ns before the earliest
+    //   possible next data-port read -- more margin than the 8 MHz design had.
     //
     // Two things here are NOT simplifiable.  vera_access must not be gated by
-    // cpu_rdy (gating kills it during the read stall), and the write/read
-    // strobes must use the LATCHED q-flags rather than live cpu_rwn.
+    // cpu_rdy (gating kills it during the read stall), and the write strobes
+    // must use the LATCHED q-flags rather than live cpu_rwn.
     // ========================================================================
     wire vera_access = vera_cs;
     wire vera_write  = vera_access & ~cpu_rwn;
     wire vera_read   = vera_access &  cpu_rwn;
 
-    reg        vera_access_q1, vera_access_q2;
-    reg        vera_write_q1,  vera_write_q2,  vera_write_q3;
-    reg        vera_read_q1,   vera_read_q2;
-    reg  [7:0] cpu_do_q1,      cpu_do_q2,      cpu_do_q3;
+    reg        vera_write_q1,  vera_write_q2,  vera_write_q3,  vera_write_q4;
+    reg        vera_read_q1;
+    reg  [7:0] cpu_do_q1,      cpu_do_q2,      cpu_do_q3,      cpu_do_q4;
     reg  [4:0] cpu_a5_q1;
 
     always @(posedge cpu_clk or negedge cpu_reset_n) begin
         if (!cpu_reset_n) begin
-            vera_access_q1 <= 1'b0;  vera_access_q2 <= 1'b0;
-            vera_write_q1  <= 1'b0;  vera_write_q2  <= 1'b0;  vera_write_q3 <= 1'b0;
-            vera_read_q1   <= 1'b0;  vera_read_q2   <= 1'b0;
-            cpu_do_q1      <= 8'h00; cpu_do_q2      <= 8'h00; cpu_do_q3     <= 8'h00;
+            vera_write_q1  <= 1'b0;  vera_write_q2  <= 1'b0;
+            vera_write_q3  <= 1'b0;  vera_write_q4  <= 1'b0;
+            vera_read_q1   <= 1'b0;
+            cpu_do_q1      <= 8'h00; cpu_do_q2      <= 8'h00;
+            cpu_do_q3      <= 8'h00; cpu_do_q4      <= 8'h00;
             cpu_a5_q1      <= 5'h00;
         end else begin
-            vera_access_q1 <= vera_access;
-            vera_access_q2 <= vera_access_q1;
             vera_write_q1  <= vera_write;
             vera_write_q2  <= vera_write_q1;
             vera_write_q3  <= vera_write_q2;
+            vera_write_q4  <= vera_write_q3;
             vera_read_q1   <= vera_read;
-            vera_read_q2   <= vera_read_q1;
             if (vera_access) cpu_a5_q1 <= cpu_a[4:0];
             if (vera_write)  cpu_do_q1 <= cpu_do;
             cpu_do_q2      <= cpu_do_q1;
             cpu_do_q3      <= cpu_do_q2;
+            cpu_do_q4      <= cpu_do_q3;
         end
     end
 
-    wire vera_access_bw = vera_access_q1 | vera_access_q2;
-    wire vera_write_bw  = vera_write_q1  | vera_write_q2;
-    wire vera_read_bw   = vera_read_q1   | vera_read_q2;
+    wire vera_write_bw  = vera_write_q1 | vera_write_q2 | vera_write_q3;
+    wire vera_read_bw   = vera_read & vera_read_q1;          // live-end
+    wire vera_access_bw = vera_write_bw | vera_read_bw;
 
     reg [1:0] vera_read_stall = 2'h0;
     always @(posedge cpu_clk or negedge cpu_reset_n) begin
@@ -602,16 +708,18 @@ module emu
     // the DMA safe without arbitration -- the CPU issues no memory access
     // while it runs -- and it is why software never has to poll: the
     // instruction after the command write executes once the transfer is done.
-    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd2)) & sdram_ready & ~sd_busy;
+    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd3)) & sdram_ready & ~sd_busy;
 
     wire [4:0] vera_a_out = vera_access ? cpu_a[4:0] : cpu_a5_q1;
     wire [7:0] vera_d_out = vera_write    ? cpu_do    :
                             vera_write_q1 ? cpu_do_q1 :
                             vera_write_q2 ? cpu_do_q2 :
-                                            cpu_do_q3;
+                            vera_write_q3 ? cpu_do_q3 :
+                                            cpu_do_q4;
 
     wire [7:0] vera_extbus_d;
-    wire       vera_d_drive = vera_write | vera_write_q1 | vera_write_q2 | vera_write_q3;
+    wire       vera_d_drive = vera_write | vera_write_q1 | vera_write_q2
+                            | vera_write_q3 | vera_write_q4;
     assign vera_extbus_d = vera_d_drive ? vera_d_out : 8'hZZ;
 
     wire [3:0] vera_r, vera_g, vera_b;
@@ -695,7 +803,7 @@ module emu
         .reset_n      (cpu_reset_n),
         .cs           (vera2_cs),
         .rwn          (cpu_rwn),
-        .cpu_rdy      (cpu_rdy),
+        .cpu_rdy      (cpu_adv),
         .addr         (cpu_a[3:0]),
         .di           (cpu_do),
         .do_o         (vera2_data),
@@ -930,7 +1038,7 @@ module emu
         .reset_n (cpu_reset_n),
         .cs      (via1_cs),
         .rwn     (cpu_rwn),
-        .enable  (cpu_rdy),
+        .enable  (cpu_adv),
         .addr    (cpu_a[3:0]),
         .di      (cpu_do),
         .do_o    (via1_data),
@@ -965,7 +1073,7 @@ module emu
         .reset_n (cpu_reset_n),
         .cs      (via2_cs),
         .rwn     (cpu_rwn),
-        .enable  (cpu_rdy),
+        .enable  (cpu_adv),
         .addr    (cpu_a[3:0]),
         .di      (cpu_do),
         .do_o    (via2_data),
@@ -1114,7 +1222,7 @@ module emu
     // ========================================================================
     reg [7:0] open_bus_r = 8'h00;
     always @(posedge cpu_clk)
-        if (cpu_rdy) open_bus_r <= cpu_rwn ? cpu_di : cpu_do;
+        if (cpu_adv) open_bus_r <= cpu_rwn ? cpu_di : cpu_do;
 
     // boot_sel FIRST: the overlay shadows the top page of bank-0 RAM on reads.
     assign cpu_di = boot_sel   ? boot_data     :

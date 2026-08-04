@@ -146,16 +146,27 @@ offsets and any driver written against them port over unchanged.
 Unmapped reads return the last byte on the data bus (floating-bus emulation),
 not `$00` — returning zero makes device-probing code false-positive.
 
-**SYSCTL `$9F80`** — bit 0 boot ROM overlay enable (1 at reset, write 0 to drop
+**TURBO MODE 8Mhz/14Mhz SYSCTL `$9F80`** — bit 0 boot ROM overlay enable (1 at reset, write 0 to drop
 it); bit 1 reads the CPU's live E flag, so software can assert it is really in
-native mode.
+native mode; bit 2 **TURBO** (read/write, 0 at reset): 0 paces the CPU to an
+exact 8.000 MHz average, 1 runs it at the domain's full 14 MHz
+(`rtl/cpu_pace.sv`). The bit may be flipped at any time — it is a
+clock-enable, not a clock switch, so nothing glitches and no reset is needed.
+The MiSTer OSD's **CPU Turbo** option ORs over this bit: On forces 14 MHz
+machine-wide from power-on (the setting persists in the core's `.cfg`), Off
+leaves speed to software. Reading bit 2 returns the *effective* speed —
+software OR OSD — so a program asserting its speed always sees the truth.
+Peripheral timing, VERA strobe widths and the millisecond timer are identical
+in both speeds; what changes is instruction rate (and, with it, VIA timer
+rates, which count CPU cycles).
 
 ### Millisecond timer — `$9F90-$9F93`
 
 `rtl/ms_timer.sv`, and `timer_step`/`timer_read` in the emulator's
 `src/memory.c`. A 32-bit little-endian count of milliseconds since reset,
-read-only. `cpu_clk` is 8.000 MHz and the divider is 8000, so the tick is 1 kHz
-exactly and 32 bits is 49.7 days.
+read-only. The divider runs on the raw 14 MHz domain clock — not the paced
+CPU enable — and divides by 14000, so the tick is 1 kHz exactly in *both*
+SYSCTL[2] CPU speeds and 32 bits is 49.7 days.
 
 | Range | |
 |---|---|
@@ -385,8 +396,10 @@ matters for anything proposed next, so both numbers are here (build of
 | Negative slack | **none** |
 
 Every tight path belongs to the MiSTer framework's PLL/HDMI clocking, not to
-X816 logic. The CPU (8 MHz), VERA (25 MHz) and SDRAM (100 MHz) domains all
-close comfortably.
+X816 logic. The CPU (14 MHz since TURBO round 2; domain Fmax 17.7 MHz — a
+16 MHz attempt passed STA and still crashed the board, so 14 is the proven
+ceiling), VERA
+(25 MHz) and SDRAM (100 MHz) domains all close comfortably.
 
 So: **anything new that wants block RAM has to take it from something already
 here** — 13 blocks is nothing, and VERA2's line buffers are exactly that kind

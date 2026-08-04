@@ -84,10 +84,11 @@ X816_VIA1           = $9F00
 X816_VIA2           = $9F10
 X816_VERA           = $9F20        ; $9F20-$9F3F
 X816_YM             = $9F40
-X816_SYSCTL         = $9F80        ; bit 0 boot overlay, bit 1 E flag (r/o)
+X816_SYSCTL         = $9F80        ; bit 0 boot overlay, bit 1 E flag (r/o), bit 2 turbo
 X816_SYSCTL_LAST    = $9F8F        ; end of the SYSCTL decode
 X816_SYSCTL_OVERLAY = $01          ; bit 0: boot ROM overlay enable
 X816_SYSCTL_EMU     = $02          ; bit 1: CPU E flag, read-only
+X816_SYSCTL_TURBO   = $04          ; bit 2: CPU speed, 0 = 8 MHz average (reset), 1 = 14 MHz
 X816_SD_LBA         = $9F81        ; $9F81-$9F84 block number, LE
 X816_SD_MEM         = $9F85        ; $9F85-$9F87 DMA address, LE (READ only)
 X816_SD_COUNT       = $9F88        ; blocks to transfer, 1-255
@@ -98,7 +99,7 @@ X816_SD_DATA        = $9F8C        ; block-buffer window, auto-incrementing
 X816_KBD_COUNT      = $9F8D        ; keyboard diagnostic counters, $9F8D-$9F8F
 X816_TIMER          = $9F90        ; $9F90-$9F93 free-running ms counter, LE
 X816_TIMER_LAST     = $9F93        ; reading $9F90 latches bits 31:8
-X816_TIMER_DIV      = 8000         ; cpu_clk cycles per tick: 8.000 MHz / 8000 = 1 kHz exactly
+X816_TIMER_DIV      = 14000        ; cpu_clk cycles per tick: 14 MHz / 14000 = 1 kHz exactly, in both SYSCTL[2] CPU speeds
 X816_TIMER_HZ       = 1000         ; so the unit is a millisecond
 X816_BOOT_BASE      = $FF00        ; boot ROM read overlay, bank $00
 X816_BOOT_SIZE      = $100         ; and it is exactly one page

@@ -20,6 +20,12 @@
 #   ./run.sh timer    # the $9F90 millisecond counter: rate, the read latch
 #                     # across a carry, and -- the point of it -- that the
 #                     # count keeps running while cpu_rdy is held LOW
+#   ./run.sh pace     # the SYSCTL[2] TURBO pacer: exactly 4 advances per
+#                     # 7 cycles when paced, every cycle in turbo, bounded
+#                     # gaps, clean mode switches
+#   ./run.sh bootpace # the boot target again with the pacer in 8 MHz mode,
+#                     # so the real CPU HOLDS bus states against the real
+#                     # memories -- the behaviour turbo introduced
 #   ./run.sh lint     # elaborate VERA's top and FAIL on any port/connection
 #                     # width mismatch (see the target for why this exists)
 #   ./run.sh contract # core<->ROM<->emulator constants: generated files
@@ -62,7 +68,8 @@ vcom -quiet -2008 -work work \
 
 echo "=== compile RTL + sim models + testbenches ==="
 vlog -quiet -sv ../rtl/bank0_ram.sv ../rtl/boot_rom.sv ../rtl/flat_sdram.sv \
-     ../rtl/fast_ram.sv sdram_sim.v vera_stub.sv tb_boot.v
+     ../rtl/fast_ram.sv ../rtl/cpu_pace.sv sdram_sim.v vera_stub.sv tb_boot.v
+vlog -quiet -sv ../rtl/cpu_pace.sv tb_cpu_pace.v
 vlog -quiet -sv ../vera/fpga/source/main_ram.v ../vera/fpga/source/vram_if.v \
      ../vera/fpga/source/blit816.v tb_blit816.v
 vlog -quiet -sv ../rtl/ms_timer.sv tb_ms_timer.v
@@ -70,10 +77,18 @@ vlog -quiet -sv ../rtl/fast_ram.sv tb_fast_ram.v
 vlog -quiet -sv ../rtl/flat_sdram.sv sdram_sim.v tb_vfb.v
 vlog -quiet -sv ../rtl/vera2_engine.sv ../rtl/vera2_regs.sv ../rtl/flat_sdram.sv sdram_sim.v tb_vera2.v
 
-run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length
-  local out
-  out=$(vsim -c -gMODE=$1 -gIMAGE_HEX="$2" -gIMAGE_LEN=$3 -do "run -all; quit -f" tb_boot 2>&1) || true
+run_boot () {  # $1 = MODE, $2 = image hex, $3 = image length, [$4 = PACED]
+  local out paced
+  paced=${4:-0}
+  out=$(vsim -c -gMODE=$1 -gIMAGE_HEX="$2" -gIMAGE_LEN=$3 -gPACED=$paced -do "run -all; quit -f" tb_boot 2>&1) || true
   echo "$out" | grep -E "\[TB\]|PASS|FAIL|TRAP|Error" || echo "$out" | tail -20
+  echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
+}
+
+run_pace () {
+  local out
+  out=$(vsim -c -do "run -all; quit -f" tb_cpu_pace 2>&1) || true
+  echo "$out" | grep -E "\[TB\]|PASS|FAIL|Error" || echo "$out" | tail -20
   echo "$out" | grep -q '\*\*\* PASS \*\*\*' || { echo "*** TARGET FAILED ***"; return 1; }
 }
 
@@ -211,9 +226,15 @@ run_calypsi () {
 
 case "${1:-all}" in
   boot)     run_boot 1 bootprobe.hex $PROBE_LEN ;;
+  # the boot path again, with the TURBO pacer in 8 MHz mode: the CPU holds
+  # every bus state for 0-1 extra cycles, which is the one behaviour the
+  # turbo change introduced and the only target that drives it through the
+  # real CPU + memories (tb_vfb/tb_vera2 tie adv high on purpose)
+  bootpace) run_boot 1 bootprobe.hex $PROBE_LEN 1 ;;
   fw)       run_boot 2 fwprobe.hex   $FWPROBE_LEN ;;
   noboot)   run_boot 0 bootprobe.hex $PROBE_LEN ;;
   blit)     run_blit ;;
+  pace)     run_pace ;;
   timer)    run_timer ;;
   vera2)    run_vera2 ;;
   vfb)      run_vfb ;;
@@ -224,7 +245,9 @@ case "${1:-all}" in
   all)    echo "----- contract (shared constants) -----"; run_contract
           echo "----- calypsi (compiler miscompile scan) -----"; run_calypsi
           echo "----- lint (VERA port widths) -----";  run_lint
+          echo "----- pace (TURBO advance pacer) -----"; run_pace
           echo "----- boot (staged program) -----";    run_boot 1 bootprobe.hex $PROBE_LEN
+          echo "----- bootpace (boot, 8 MHz-paced CPU) -----"; run_boot 1 bootprobe.hex $PROBE_LEN 1
           echo "----- fw (kernel firmware) -----";     run_boot 2 fwprobe.hex   $FWPROBE_LEN
           echo "----- blit (VRAM blitter) -----";      run_blit
           echo "----- timer (ms counter) -----";       run_timer
@@ -232,6 +255,6 @@ case "${1:-all}" in
           echo "----- vera2 (bitmap layer) -----";     run_vera2
           echo "----- fastram (banks $01-$04) -----";  run_fastram
           echo "----- noboot (bands fallback) -----";  run_boot 0 bootprobe.hex $PROBE_LEN ;;
-  *)      echo "unknown target: $1 (boot | fw | noboot | blit | timer | vfb | vera2 | fastram | lint | contract | calypsi | all)"
+  *)      echo "unknown target: $1 (boot | bootpace | fw | noboot | blit | pace | timer | vfb | vera2 | fastram | lint | contract | calypsi | all)"
           exit 1 ;;
 esac

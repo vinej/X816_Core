@@ -46,8 +46,10 @@
 // its own break (a break of a DIFFERENT key does not stop it, like real
 // typematic).  Pause (ext $77) never repeats: hps_io never sends its break.
 module ps2_to_smc_bridge #(
-    parameter int TPM_DELAY = 4_000_000,  // 500 ms  @ 8 MHz cpu_clk
-    parameter int TPM_RATE  =   736_000   // 10.9 cps @ 8 MHz cpu_clk
+    // The bridge free-runs on the raw domain clock (14 MHz since the TURBO
+    // change), NOT on the paced CPU enable, so these are mode-independent.
+    parameter int TPM_DELAY = 7_000_000,  // 500 ms  @ 14 MHz cpu_clk
+    parameter int TPM_RATE  = 1_288_000   // 10.9 cps @ 14 MHz cpu_clk (92 ms)
 ) (
     input  logic        clk,             // cpu_clk
     input  logic        reset_n,         // cpu_reset_n

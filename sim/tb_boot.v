@@ -44,12 +44,18 @@ module tb_boot #(
     parameter integer MODE        = 1,           // 0=none, 1=program, 2=firmware
     parameter         IMAGE_HEX   = "bootprobe.hex",
     parameter integer IMAGE_LEN   = 0,           // bytes; run.sh passes wc -l
-    parameter integer TIMEOUT_CYC = 4_000_000,   // cpu_clk cycles (0.5 s)
-    parameter integer RING        = 64
+    parameter integer TIMEOUT_CYC = 4_000_000,   // cpu_clk cycles
+    parameter integer RING        = 64,
+    // 1 = run with the TURBO pacer in 8 MHz mode (rtl/cpu_pace.sv, x816.sv
+    // SYSCTL[2]=0), so the CPU HOLDS bus states for extra cycles -- the one
+    // behaviour turbo introduced that only the real CPU against the real
+    // memories can prove.  0 = advance every cycle, the turbo/pre-turbo
+    // behaviour and the fast default.  run.sh target `bootpace` sets it.
+    parameter integer PACED       = 0
 );
     localparam [23:0] STAGE_BASE = (MODE == 2) ? 24'hF00000 : 24'h010000;
-    // ---- clocks: 8 MHz cpu, 100 MHz sdram (x816.sv pll outclk_2/outclk_3) --
-    reg cpu_clk   = 0; always #62.5 cpu_clk   = ~cpu_clk;
+    // ---- clocks: 14 MHz cpu, 100 MHz sdram (x816.sv pll outclk_1/3) --------
+    reg cpu_clk   = 0; always #35.7 cpu_clk   = ~cpu_clk;
     reg sdram_clk = 0; always #5    sdram_clk = ~sdram_clk;
 
     // ---- resets: memory alive during staging, CPU held (x816.sv:97-112) ----
@@ -66,9 +72,19 @@ module tb_boot #(
     wire        cpu_rdy;
     wire        vera_irq_n;
 
+    // ---- pacing: replica of x816.sv's cpu_adv (turbo pinned by PACED) ------
+    wire pace_adv;
+    cpu_pace u_pace (
+        .clk     (cpu_clk),
+        .reset_n (cpu_reset_n),
+        .turbo   (PACED == 0),
+        .adv_en  (pace_adv)
+    );
+    wire cpu_adv = cpu_rdy & pace_adv;
+
     p65c816_flat_wrap u_cpu (
         .clk        (cpu_clk),
-        .enable     (cpu_rdy),
+        .enable     (cpu_adv),
         .res_n      (cpu_reset_n),
         .irq_n      (vera_irq_n),      // stub never raises it (IEN stays 0)
         .nmi_n      (1'b1),
@@ -188,6 +204,7 @@ module tb_boot #(
         .reset_n    (mem_reset_n),
         .cs         (flat_cs),
         .we         (~cpu_rwn),
+        .adv        (cpu_adv),
         .byte_addr  (cpu_a),
         .wr_data    (cpu_do),
         .rd_data    (sdram_data),
@@ -226,7 +243,7 @@ module tb_boot #(
         .clk     (cpu_clk),
         .reset_n (cpu_reset_n),
         .cs      (vera_cs),
-        .we      (vera_cs & ~cpu_rwn & cpu_rdy),
+        .we      (vera_cs & ~cpu_rwn & cpu_adv),
         .addr    (cpu_a[4:0]),
         .wr_data (cpu_do),
         .rd_data (vera_stub_rd),
@@ -242,14 +259,15 @@ module tb_boot #(
         end else              vera_read_stall <= 2'h0;
     end
 
-    // x816.sv:505 without the sd_busy term (no sd_block in this TB)
-    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd2)) & sdram_ready;
+    // x816.sv's cpu_rdy without the sd_busy term (no sd_block in this TB);
+    // the read stall is 3 cycles since turbo, matching the top.
+    assign cpu_rdy = (~vera_read | (vera_read_stall >= 2'd3)) & sdram_ready;
 
     // ---- CPU data-in mux: replica of x816.sv:927-940 -----------------------
     // (via/ym fall through to open bus here -- the boot ROM never reads them)
     reg [7:0] open_bus_r = 8'h00;
     always @(posedge cpu_clk)
-        if (cpu_rdy) open_bus_r <= cpu_rwn ? cpu_di : cpu_do;
+        if (cpu_adv) open_bus_r <= cpu_rwn ? cpu_di : cpu_do;
 
     assign cpu_di = boot_sel   ? boot_data    :
                     fast_cs    ? fast_data    :
@@ -304,7 +322,7 @@ module tb_boot #(
     // ========================================================================
     // Monitors
     // ========================================================================
-    wire committed = cpu_reset_n & cpu_rdy;
+    wire committed = cpu_reset_n & cpu_adv;
 
     // ring buffer of the last RING committed bus cycles
     reg [23:0] ring_a   [0:RING-1];

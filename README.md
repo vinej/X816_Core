@@ -2,7 +2,11 @@
 
 A new machine, not a Commander X16. It runs the 65C816 in **native mode only**
 (M=0, X=0) over a **flat 24-bit / 16 MB** address space, with no bank latches
-and no paging windows.
+and no paging windows. The CPU runs at **8 MHz** out of reset and at
+**14 MHz** with the SYSCTL TURBO bit set (`doc/MEMORY_MAP.md`, `$9F80`
+bit 2) — a runtime clock-enable switch, safe to flip at any time. The
+MiSTer OSD's **CPU Turbo** option forces 14 MHz machine-wide, persistently,
+without software involvement.
 
 It reuses the [Commander X16 MiSTer core](../x16_mister)'s peripherals — VERA,
 YM2151, two 6522 VIAs, the SMC keyboard path — and the whole MiSTer framework.
@@ -27,7 +31,7 @@ I/O page:
 | `$9F10-$9F1F` | VIA #2 (user port) |
 | `$9F20-$9F3F` | VERA |
 | `$9F40-$9F4F` | YM2151 |
-| `$9F80-$9F8F` | SYSCTL — bit 0 boot overlay; reads also expose the CPU's E flag |
+| `$9F80-$9F8F` | SYSCTL — bit 0 boot overlay; bit 1 E flag (r/o); bit 2 TURBO (8 → 14 MHz) |
 
 ## Requirements
 
@@ -82,8 +86,8 @@ The **blitter** ([doc/BLIT816.md](doc/BLIT816.md)) is confirmed on hardware:
 `RUN BLITTEST.BIN` from the demo card exercises fill and copy at every
 alignment, the wrap at the top of VRAM, and the firmware write-protect, and
 comes up green on a DE10-Nano. It is worth roughly **50×** over the CPU data
-port on a bulk fill — ~0.8 ms against ~38 ms for a 320×240 8bpp screen — which
-is what makes bitmap modes usable at 8 MHz.
+port on a bulk fill — ~0.8 ms against ~38 ms for a 320×240 8bpp screen at the
+8 MHz pace — which is what makes bitmap modes usable from the CPU at all.
 
 **VERA is otherwise stock.** X816 carried an extended VERA — 352 KB of VRAM, a
 19-bit address space, `ADDRX`, `L0_BASEX`, `CTRL816.REGWIN`, widened sprite

@@ -70,7 +70,10 @@ module tb_vfb;
 
     flat_sdram dut (
         .clk(clk), .reset_n(reset_n),
-        .cs(cs), .we(we), .byte_addr(byte_addr),
+        // adv tied high: this TB's driver consumes on the ready cycle, the
+        // pre-turbo contract.  The paced (held-state) path is proven by
+        // run.sh `bootpace` with the real CPU.
+        .cs(cs), .we(we), .adv(1'b1), .byte_addr(byte_addr),
         .wr_data(wr_data), .rd_data(rd_data), .ready(ready),
         .sdram_clk(sdram_clk),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data), .ld_busy(ld_busy),

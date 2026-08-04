@@ -37,8 +37,10 @@ against them — port over unchanged.
 | Memory system | 3 | **new** |
 | Top level | 1 | **new** |
 
-The PLL IP is carried over unmodified, so no IP regeneration is needed:
-25.0 MHz pixel / 12.5 MHz spare / 8.0 MHz CPU / 100.0 MHz SDRAM.
+The PLL IP is carried over with one hand edit — outclk_1 retuned from
+12.5 MHz to 14 MHz for the TURBO cpu_clk domain (Quartus recomputes the
+counters from the frequency parameter in `pll/pll_0002.v` at synthesis):
+25.0 MHz pixel / 14.0 MHz cpu_clk / 8.0 MHz spare / 100.0 MHz SDRAM.
 
 ---
 

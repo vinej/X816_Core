@@ -84,6 +84,10 @@ module flat_sdram (
     input  logic        reset_n,
     input  logic        cs,           // access targets flat RAM this cycle
     input  logic        we,           // 1 = write
+    input  logic        adv,          // CPU consumes its bus state this cycle
+                                      // (x816.sv cpu_adv = cpu_rdy & pace --
+                                      // the TURBO pacer can hold a bus state
+                                      // for cycles with ready already high)
     input  logic [23:0] byte_addr,    // flat CPU address {bank, offset}
     input  logic  [7:0] wr_data,
     output logic  [7:0] rd_data,
@@ -266,8 +270,10 @@ module flat_sdram (
     // Push exactly once per write, on its committing (unstalled) cycle.  The
     // '816 freezes mid-write when stalled, holding cs/we/addr/data; an ungated
     // push would re-push every clock until wf_wr laps wf_rd and writes are LOST.
-    // During a write, ready == ~wf_hi, so ~wf_hi *is* "at the commit edge".
-    wire wpush = cs & we & ~wf_hi;
+    // During a write, ready == ~wf_hi, so ~wf_hi was "at the commit edge" --
+    // until the TURBO pacer, which holds a write state for extra cycles with
+    // ready high.  `adv` names the commit cycle exactly, in both modes.
+    wire wpush = cs & we & ~wf_hi & adv;
 
     logic [1:0] ack_s;
     logic       ack_d, waiting, served_valid, wr_since_issue;
@@ -286,10 +292,13 @@ module flat_sdram (
             ack_s <= {ack_s[0], ack_tgl};
             ack_d <= ack_s[1];
 
-            // consume-clear: on the delivery cycle the CPU takes rd_data at
-            // this posedge, so the next in-window access must re-serve.
-            if (cs & ~we & served_valid) served_valid <= 1'b0;
-            if (!cs)                     served_valid <= 1'b0;
+            // consume-clear: on the cycle the CPU takes rd_data at this
+            // posedge, the next in-window access must re-serve.  `adv` names
+            // that cycle: without it, a CPU held by the pacer (or by sd_busy,
+            // which pre-dates the pacer) had its delivery cleared under it
+            // and the read re-served -- harmless but wasted SDRAM rounds.
+            if (cs & ~we & served_valid & adv) served_valid <= 1'b0;
+            if (!cs)                           served_valid <= 1'b0;
 
             // issue next access: queued writes first, then the pending read
             if (!waiting) begin

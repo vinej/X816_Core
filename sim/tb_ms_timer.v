@@ -27,8 +27,8 @@
 // measured the stalled case could be satisfied by a counter that had stopped
 // for some entirely different reason.
 //
-// TIMER_DIV is overridden to 16 here. The real value is 8000, so reaching a
-// 256-count carry would take two million clocks; the divider is not the thing
+// TIMER_DIV is overridden to 16 here. The real value is 14000, so reaching a
+// 256-count carry would take millions of clocks; the divider is not the thing
 // under test in properties 2 and 3, and property 1 checks the divider itself
 // against whatever it was given.
 //============================================================================
@@ -48,7 +48,7 @@ module tb_ms_timer;
 
     integer errors = 0;
 
-    ms_timer #(.TIMER_DIV(DIV[12:0])) dut (
+    ms_timer #(.TIMER_DIV(DIV[13:0])) dut (
         .clk     (clk),
         .reset_n (reset_n),
         .cs      (cs),

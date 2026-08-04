@@ -50,36 +50,38 @@
 `default_nettype none
 
 module ms_timer #(
-    // cpu_clk cycles per tick.  8.000 MHz / 8000 = 1 kHz exactly, so the unit
-    // is a millisecond with no rounding error to accumulate.  Checked against
-    // the contract by tools/contract.py; the testbench overrides it to
-    // something small so it can reach a carry without simulating a quarter of
-    // a second.
-    parameter [12:0] TIMER_DIV = 13'd8000
+    // cpu_clk cycles per tick.  14 MHz / 14000 = 1 kHz exactly, so the unit
+    // is a millisecond with no rounding error to accumulate -- and because
+    // this divides the raw domain clock, which never changes, the tick is
+    // exact in BOTH of SYSCTL[2]'s CPU speeds.  Checked against the contract
+    // by tools/contract.py; the testbench overrides it to something small so
+    // it can reach a carry without simulating a quarter of a second.
+    parameter [13:0] TIMER_DIV = 14'd14000
 ) (
     input  wire       clk,
     input  wire       reset_n,
     input  wire       cs,        // $9F90-$9F93, already dec_valid-qualified
     input  wire       rd,        // cpu_rwn
     input  wire       cpu_rdy,   // a read commits only on an advancing cycle
+                                 // (x816.sv passes cpu_adv: rdy AND pace)
     input  wire [1:0] addr,
     output wire [7:0] rd_data
 );
 
-    reg [12:0] div_r   = 13'd0;
+    reg [13:0] div_r   = 14'd0;
     reg [31:0] ms_r    = 32'd0;
     reg [23:0] latch_r = 24'd0;
 
     // Deliberately NOT gated by cpu_rdy.  See the header.
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            div_r <= 13'd0;
+            div_r <= 14'd0;
             ms_r  <= 32'd0;
-        end else if (div_r == TIMER_DIV - 13'd1) begin
-            div_r <= 13'd0;
+        end else if (div_r == TIMER_DIV - 14'd1) begin
+            div_r <= 14'd0;
             ms_r  <= ms_r + 32'd1;
         end else begin
-            div_r <= div_r + 13'd1;
+            div_r <= div_r + 14'd1;
         end
     end
 

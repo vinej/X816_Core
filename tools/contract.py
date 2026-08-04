@@ -289,10 +289,13 @@ X16 register offsets port over unchanged; $9F80-$9F8F is X816's own.""",
         Const("X816_VIA2", 0x9F10, 4, ""),
         Const("X816_VERA", 0x9F20, 4, "$9F20-$9F3F"),
         Const("X816_YM", 0x9F40, 4, ""),
-        Const("X816_SYSCTL", 0x9F80, 4, "bit 0 boot overlay, bit 1 E flag (r/o)"),
+        Const("X816_SYSCTL", 0x9F80, 4,
+              "bit 0 boot overlay, bit 1 E flag (r/o), bit 2 turbo"),
         Const("X816_SYSCTL_LAST", 0x9F8F, 4, "end of the SYSCTL decode"),
         Const("X816_SYSCTL_OVERLAY", 0x01, 2, "bit 0: boot ROM overlay enable"),
         Const("X816_SYSCTL_EMU", 0x02, 2, "bit 1: CPU E flag, read-only"),
+        Const("X816_SYSCTL_TURBO", 0x04, 2,
+              "bit 2: CPU speed, 0 = 8 MHz average (reset), 1 = 14 MHz"),
         # The SD block device. CMD and STATUS are separate addresses on
         # purpose and $9F8B must stay unmapped -- rtl/sd_block.sv says why at
         # length, and doc/AUDIT.md M-3 is what happens when a doc disagrees.
@@ -310,8 +313,9 @@ X16 register offsets port over unchanged; $9F80-$9F8F is X816's own.""",
         # at $9FB0, which is emulator-only and must stay reachable.
         Const("X816_TIMER", 0x9F90, 4, "$9F90-$9F93 free-running ms counter, LE"),
         Const("X816_TIMER_LAST", 0x9F93, 4, "reading $9F90 latches bits 31:8"),
-        Const("X816_TIMER_DIV", 8000, 4,
-              "cpu_clk cycles per tick: 8.000 MHz / 8000 = 1 kHz exactly",
+        Const("X816_TIMER_DIV", 14000, 5,
+              "cpu_clk cycles per tick: 14 MHz / 14000 = 1 kHz exactly, "
+              "in both SYSCTL[2] CPU speeds",
               base=10),
         Const("X816_TIMER_HZ", 1000, 4, "so the unit is a millisecond", base=10),
         Const("X816_BOOT_BASE", 0xFF00, 4, "boot ROM read overlay, bank $00"),
@@ -977,11 +981,11 @@ def sites():
         # instantiation would miss the module being reused elsewhere with a
         # default nobody looked at.
         Site(_k("rtl", "ms_timer.sv"), "X816_TIMER_DIV",
-             r"parameter \[12:0\] TIMER_DIV\s*=\s*13'd(\d+)",
+             r"parameter \[13:0\] TIMER_DIV\s*=\s*14'd(\d+)",
              "cpu_clk cycles per millisecond tick, the module default",
              parse=lambda s: int(s, 10)),
         Site(_k("x816.sv"), "X816_TIMER_DIV",
-             r"ms_timer #\(\.TIMER_DIV\(13'd(\d+)\)\)",
+             r"ms_timer #\(\.TIMER_DIV\(14'd(\d+)\)\)",
              "...and the value the core actually instantiates it with",
              parse=lambda s: int(s, 10)),
     ]

@@ -88,7 +88,8 @@ module tb_vera2;
 
     flat_sdram u_flat (
         .clk(cpu_clk), .reset_n(reset_n),
-        .cs(cs), .we(we), .byte_addr(byte_addr),
+        // adv tied high: see tb_vfb.v.
+        .cs(cs), .we(we), .adv(1'b1), .byte_addr(byte_addr),
         .wr_data(wr_data), .rd_data(rd_data), .ready(ready),
         .sdram_clk(sdram_clk),
         .ld_wr(1'b0), .ld_addr(24'd0), .ld_data(8'd0), .ld_busy(),

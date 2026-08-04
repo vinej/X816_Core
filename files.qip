@@ -23,6 +23,8 @@ set_global_assignment -name VERILOG_FILE rtl/sdram.v
 # The kernel's monotonic clock at $9F90. Gated by nothing, which is the point
 # -- see the file, and doc/AUDIT.md L-4 for what it exists to avoid.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ms_timer.sv
+# The CPU advance pacer behind SYSCTL[2] TURBO (8 MHz-average vs 14 MHz).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu_pace.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vera2_engine.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vera2_regs.sv
 # Banks $01-$04 in BRAM (doc/BRAM_SWITCH.md). NOT YET WIRED INTO x816.sv.
