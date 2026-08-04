@@ -255,7 +255,8 @@ FORTH_SRC = [("forth", n, n) for n in
               ("testtile", "testtile"), ("testpalfx", "testpal"),
               ("testcoreadd", "coreadd"), ("testfar", "testfar"),
               ("testbrk", "testbrk"), ("testturbo", "turbo"),
-              ("testnmi", "testnmi"), ("test", "test"), ("1", "1")]]
+              ("testnmi", "testnmi"), ("testfont", "testfont"),
+              ("test", "test"), ("1", "1")]]
 for subdir, name, card in FORTH_SRC:
     path = os.path.join(FORTH_REPO, subdir, name + ".fs")
     if not os.path.exists(path):
