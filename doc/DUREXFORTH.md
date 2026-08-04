@@ -5,6 +5,10 @@ How to get a Forth prompt on X816, starting from
 lives in `C:\quartus\projects\X816_DurexForth`** — a clone with history, cut
 loose on 2026-08-03.
 
+**Stage B (32-bit cells) is GREEN ON HARDWARE (2026-08-04)** — the MiSTer
+runs `INCLUDE TEST` to the PASS banner on the stage-B image; `stage-b` is
+merged to the port's main.
+
 **The full test suite is GREEN in the emulator (2026-08-04).** The port's
 `run-tests.sh` ends in `+++ ALL TESTS PASSED +++` with its negative control:
 the ANS core, core-plus, core-ext, exception and double suites plus the
