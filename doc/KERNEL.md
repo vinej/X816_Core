@@ -185,6 +185,7 @@ file at `$07:0000`" at all.
 | `CON_GOTOXY` | `C` = column, `X` = row | — |
 | `CON_GETXY` | — | `C` = column, `X` = row |
 | `CON_PUTRAW` | `C` = column, `X` = row, `Y` = glyph code | — |
+| `CON_CURSOR` | `C` = 1 blink at the console cursor, 0 off | — |
 
 **A key is sixteen bits, and the top byte is what makes it unambiguous:**
 
@@ -250,6 +251,16 @@ merely fail to answer, it opens a menu over the top of the scan.
 intercept `$08`, `$0A` and `$0D` as backspace, newline and return, which makes
 those three glyphs unreachable through it — and CP437 has real pictures there.
 Anything drawing with box, block or control-code glyphs wants this instead.
+
+`CON_CURSOR` is the policy switch over `runtime/ccursor.s`: a cursor belongs
+only at an input point, so a program turns it on around its key WAIT and off
+the moment a key is taken — everything printed in between runs cursor-free.
+The kernel arms it at boot for its own prompt; durexForth brackets `KEY`'s
+poll loop with it. Independent of the switch, `con_scroll` suspends the
+cursor for the whole copy: its reversed attribute is the one cell that
+breaks scroll's "every attribute is the same" premise, and a blink landing
+mid-copy would otherwise be duplicated into the row above and stranded
+there — the stray reversed cells that used to litter scrolled output.
 
 ### 5.2 Filesystem
 
