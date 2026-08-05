@@ -448,6 +448,7 @@ CALLS = [
     (6,  "K_CON_GETXY",   "k_con_getxy",   "-> C = column, X = row"),
     (7,  "K_CON_PUTRAW",  "k_con_putraw",  "C = column, X = row, Y = glyph code"),
     (8,  "K_CON_CURSOR",  "k_con_cursor",  "C = 1 blink at the console cursor, 0 off"),
+    (9,  "K_CON_COLOR",   "k_con_color",   "C = foreground, X = background (0-15)"),
     (16, "K_FS_OPEN",     "k_fs_open",     ""),
     (17, "K_FS_CLOSE",    "k_fs_close",    ""),
     (18, "K_FS_READ",     "k_fs_read",     ""),

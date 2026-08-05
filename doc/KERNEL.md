@@ -186,6 +186,7 @@ file at `$07:0000`" at all.
 | `CON_GETXY` | — | `C` = column, `X` = row |
 | `CON_PUTRAW` | `C` = column, `X` = row, `Y` = glyph code | — |
 | `CON_CURSOR` | `C` = 1 blink at the console cursor, 0 off | — |
+| `CON_COLOR` | `C` = foreground, `X` = background (0-15) | — |
 
 **A key is sixteen bits, and the top byte is what makes it unambiguous:**
 
@@ -251,6 +252,14 @@ merely fail to answer, it opens a menu over the top of the scan.
 intercept `$08`, `$0A` and `$0D` as backspace, newline and return, which makes
 those three glyphs unreachable through it — and CP437 has real pictures there.
 Anything drawing with box, block or control-code glyphs wants this instead.
+
+`CON_COLOR` sets the attribute every later `CON_PUTC` writes — foreground in
+the low nibble, background in the high one. It is a kernel call rather than a
+byte a program pokes because the blinking cursor must undraw with the SAME
+attribute: that value was a `#define` in `console.c` and a matching `.equ` in
+`ccursor.s`, with a comment warning what happens when the two drift. Making it
+settable made drifting the normal case, so there is one `con_attr` now and the
+cursor reads it live, deriving its own reversed attribute by swapping nibbles.
 
 `CON_CURSOR` is the policy switch over `runtime/ccursor.s`: a cursor belongs
 only at an input point, so a program turns it on around its key WAIT and off
