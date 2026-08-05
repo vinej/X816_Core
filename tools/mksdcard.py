@@ -259,7 +259,7 @@ FORTH_SRC = [("forth", n, n) for n in
               ("testfile", "testfile"), ("testdir", "testdir"),
               ("testhelp", "testhelp"),
               ("testload", "testload"), ("teststruct", "struct"), ("testaudio", "testaud"),
-              ("testfm", "testfm"), ("testfloat", "testfloa"),
+              ("testfm", "testfm"), ("testfloat", "testfloa"), ("testinput", "testinp"),
               ("test", "test"), ("1", "1")]] +             [("forth/mod", n, n) for n in ["fm", "float", "floatx"]]
 for subdir, name, card in FORTH_SRC:
     path = os.path.join(FORTH_REPO, subdir, name + ".fs")
