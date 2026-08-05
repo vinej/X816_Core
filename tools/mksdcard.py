@@ -257,6 +257,7 @@ FORTH_SRC = [("forth", n, n) for n in
               ("testbrk", "testbrk"), ("testturbo", "turbo"),
               ("testnmi", "testnmi"), ("testfont", "testfont"),
               ("testfile", "testfile"), ("testdir", "testdir"),
+              ("testhelp", "testhelp"),
               ("test", "test"), ("1", "1")]]
 for subdir, name, card in FORTH_SRC:
     path = os.path.join(FORTH_REPO, subdir, name + ".fs")
@@ -266,6 +267,29 @@ for subdir, name, card in FORTH_SRC:
     with open(path, "rb") as src, fs.open("/" + card.upper(), "wb") as dst:
         dst.write(src.read())
 print("  added: %d forth source files" % len(FORTH_SRC))
+
+# The help pages, which HELP <topic> reads at the prompt. Card names are
+# the topic truncated to EIGHT characters and uppercased, because the
+# kernel's FAT32 reader skips long filenames - ARITHMETIC.TXT would be
+# invisible, so it travels as ARITHMET.TXT. All forty truncate uniquely
+# (checked below: a collision would silently shadow one page).
+HELP_SRC = os.path.join(FORTH_REPO, "help", "helpdoc")
+if os.path.isdir(HELP_SRC):
+    fs.makedir("/HELP")
+    seen = {}
+    for name in sorted(os.listdir(HELP_SRC)):
+        if not name.endswith(".TXT"):
+            continue
+        card = name[:-4][:8].upper() + ".TXT"
+        if card in seen:
+            raise SystemExit("help name collision: %s and %s both -> %s"
+                             % (seen[card], name, card))
+        seen[card] = name
+        with open(os.path.join(HELP_SRC, name), "rb") as src,              fs.open("/HELP/" + card, "wb") as dst:
+            dst.write(src.read())
+    print("  added: %d help pages" % len(seen))
+else:
+    print("  skipped: no help/helpdoc in the Forth repo")
 
 fs.makedir("/PROGS")
 fs.writetext("/PROGS/PUT.TXT", "PUT YOUR OWN PROGRAMS HERE.\n")
