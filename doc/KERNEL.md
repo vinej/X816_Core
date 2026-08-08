@@ -426,6 +426,24 @@ That is the worst failure the kernel can produce, so it is designed out:
 | Source | How it is prevented from hanging the machine |
 |---|---|
 | VSYNC, LINE, SPRCOL | acknowledged by the dispatcher itself, **always**, before any handler runs and whether or not one is installed |
+
+**"Always" means: always among the sources that are ENABLED.** The
+dispatcher acknowledges `ISR & IEN`, never a bare `ISR`, and that is
+normative rather than incidental. A source whose `IEN` bit is clear is not
+asserting the IRQ line, cannot hang the machine, and therefore has nothing
+to be defended against — so its `ISR` bit is left exactly as VERA set it.
+
+That is a guarantee callers may build on, and one does: **VERA latches
+`ISR` bits for LINE and SPRCOL whether or not the source is enabled, so a
+program that wants those events without an interrupt can leave them
+disabled in `IEN` and poll `ISR`, clearing its own bit by writing it.**
+X816_SuperBasic's `ONRASTER` and `ONCOLLISION` are built exactly that way,
+because a BASIC handler runs at a statement boundary and gains nothing
+from arriving in interrupt context. Widening the acknowledgement to a bare
+`ISR` would break that with no error anywhere — the events would simply
+stop being seen.
+
+
 | AFLOW | cannot be acknowledged at all — it clears only when the audio FIFO is refilled. With no handler, its **enable** bit is cleared |
 | VIA1, VIA2 | only the VIA's own registers can clear it. With no handler, `$7F` goes to `IER`, disabling all of that VIA's sources |
 | YM2151 | with no handler, register `$14` gets `$30`: both timer flags reset and both timer IRQ enables cleared |
